@@ -301,22 +301,22 @@ def duolingo():
             return jsonify({"sortedList": [str(v) for v in values]})
 
         else:  # part == "TWO"
+            logger.info(f"Given input = {unsorted_list}")
+            
             annotated: List[Tuple[int, int, int, str]] = []
             for idx, s in enumerate(unsorted_list):
                 lang = detect_language(s)
                 val = PARSERS[lang](s.strip())
-
-                # ---------- Targeted debug: ONLY German ----------
-                if lang == LANG_EN:
-                    # Minimal line, easy to grep: DE_PARSE <word> -> <value>
-                    # (No JSON to keep it extremely compact)
-                    logger.info(f"Parsing {s} -> {val}")
-
+                
                 tie_rank = TIE_ORDER[lang]
                 annotated.append((val, tie_rank, idx, s))
 
             annotated.sort(key=lambda t: (t[0], t[1], t[2]))
-            return jsonify({"sortedList": [t[3] for t in annotated]})
+            sorted_list = [t[3] for t in annotated]
+            # log the final sorted list
+            logger.info(f"Sorted output = {sorted_list}")
+
+            return jsonify({"sortedList": sorted_list})
 
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
