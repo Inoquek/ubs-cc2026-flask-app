@@ -5,8 +5,13 @@ from routes import app
 
 ATTACK_MINUTES = 10
 COOLDOWN_MINUTES = 10
+
+logging.basicConfig(level=logging.INFO)
+FAIL_LOGGER = logging.getLogger("mages.fail")
+FAIL_LOGGER.setLevel(logging.INFO)   # <= now logs at INFO 
+
 def _log_failed_test(case, got, expected):
-    FAIL_LOGGER.error({
+    FAIL_LOGGER.info({
         "event": "test_failed",
         "intel": case.get("intel"),
         "reserve": case.get("reserve"),
