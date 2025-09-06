@@ -345,7 +345,7 @@ def operation():
     challenge3_data = data.get("challenge_three")
 
     result1 = challenge1_calc(challenge1_data)
-    result2, c2_extras = challenge2_calc(challenge2_data) = challenge2_calc(challenge2_data)
+    result2, c2_extras = challenge2_calc(challenge2_data) 
     result3 = challenge3_calc(challenge3_data)
 
     result4 = challenge4_calc(result1, result2, result3)
