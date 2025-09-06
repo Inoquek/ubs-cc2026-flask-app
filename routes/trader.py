@@ -7,15 +7,17 @@ from typing import Dict, List, Any
 from flask import request, jsonify
 from routes import app
 
+# Logging
+# ----------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ----------------------------------------------------------------------
 # Config
 # ----------------------------------------------------------------------
-DEFAULT_RESULT = 0.0   # number returned for a single test that fails
-ROUND_DP = 4           # round results to 4 decimals
-SUM_NEST_LIMIT = 50    # safety guard for nested \sum expansion
+DEFAULT_RESULT = 0.0   # fallback value for a failing testcase
+ROUND_DP = 4
+SUM_NEST_LIMIT = 50
 
 # ----------------------------------------------------------------------
 # Safe evaluation (restricted AST)
@@ -41,26 +43,16 @@ def _ops_present(expr: str) -> List[str]:
     ops = []
     if r"\frac" in expr or ("((" in expr and ")/(" in expr):
         ops.append("frac/div")
-    if "max(" in expr:
-        ops.append("max")
-    if "min(" in expr:
-        ops.append("min")
-    if r"\sum" in expr or "SUM" in expr:
-        ops.append("sum")
-    if "math.exp(" in expr:
-        ops.append("exp")
-    if "math.log(" in expr:
-        ops.append("log")
-    if "**" in expr:
-        ops.append("pow")
-    if "*" in expr:
-        ops.append("mul")
-    if "/" in expr:
-        ops.append("div")
-    if "+" in expr:
-        ops.append("add")
-    if re.search(r'[A-Za-z0-9_]\*\(', expr):
-        ops.append("implicit*")
+    if "max(" in expr: ops.append("max")
+    if "min(" in expr: ops.append("min")
+    if r"\sum" in expr or "⟪SUM⟫" in expr: ops.append("sum")
+    if "math.exp(" in expr: ops.append("exp")
+    if "math.log(" in expr: ops.append("log")
+    if "**" in expr: ops.append("pow")
+    if "*" in expr: ops.append("mul")
+    if "/" in expr: ops.append("div")
+    if "+" in expr: ops.append("add")
+    if re.search(r'[A-Za-z0-9_]\*\(', expr): ops.append("implicit*")
     return ops
 
 def _find_unbound_names(expr: str, env_keys: set) -> List[str]:
@@ -81,14 +73,11 @@ def _safe_eval(expr: str, env: Dict[str, Any]) -> float:
         if isinstance(node, ast.BinOp):
             if not isinstance(node.op, _ALLOWED_BIN_OPS):
                 raise ValueError(f"Disallowed operator: {type(node.op).__name__}")
-            _check(node.left)
-            _check(node.right)
-            return
+            _check(node.left); _check(node.right); return
         if isinstance(node, ast.UnaryOp):
             if not isinstance(node.op, _ALLOWED_UNARY_OPS):
                 raise ValueError(f"Disallowed unary operator: {type(node.op).__name__}")
-            _check(node.operand)
-            return
+            _check(node.operand); return
         if isinstance(node, ast.Call):
             func = node.func
             if isinstance(func, ast.Name):
@@ -99,18 +88,15 @@ def _safe_eval(expr: str, env: Dict[str, Any]) -> float:
                     raise ValueError("Only math.<func> attribute calls are allowed")
             else:
                 raise ValueError("Unsupported callable")
-            for a in node.args:
-                _check(a)
-            for kw in node.keywords or []:
-                _check(kw.value)
+            for a in node.args: _check(a)
+            for kw in node.keywords or []: _check(kw.value)
             return
         if isinstance(node, ast.Attribute):
             if not (isinstance(node.value, ast.Name) and node.value.id == "math"):
                 raise ValueError("Only math.<attr> is allowed")
             return
         if isinstance(node, _ALLOWED_NODES):
-            for child in ast.iter_child_nodes(node):
-                _check(child)
+            for child in ast.iter_child_nodes(node): _check(child)
             return
         raise ValueError(f"Disallowed expression node: {type(node).__name__}")
 
@@ -118,15 +104,12 @@ def _safe_eval(expr: str, env: Dict[str, Any]) -> float:
         tree = ast.parse(expr, mode="eval")
     except Exception as e:
         logger.warning("phase=ast_parse kind=%s msg=%s expr=%s",
-                       type(e).__name__, _short(str(e)), _short(expr))
-        raise
-
+                       type(e).__name__, _short(str(e)), _short(expr)); raise
     try:
         _check(tree)
     except Exception as e:
         logger.warning("phase=ast_check kind=%s msg=%s expr=%s ops=%s",
-                       type(e).__name__, _short(str(e)), _short(expr), _ops_present(expr))
-        raise
+                       type(e).__name__, _short(str(e)), _short(expr), _ops_present(expr)); raise
 
     missing = _find_unbound_names(expr, set(env.keys()))
     if missing:
@@ -136,8 +119,7 @@ def _safe_eval(expr: str, env: Dict[str, Any]) -> float:
         return eval(compile(tree, "<expr>", "eval"), {"__builtins__": {}}, env)
     except Exception as e:
         logger.warning("phase=eval kind=%s msg=%s expr=%s ops=%s",
-                       type(e).__name__, _short(str(e)), _short(expr), _ops_present(expr))
-        raise
+                       type(e).__name__, _short(str(e)), _short(expr), _ops_present(expr)); raise
 
 # ----------------------------------------------------------------------
 # LaTeX preprocessing
@@ -154,14 +136,10 @@ _GREEK = {
     r"\Phi": "Phi", r"\Psi": "Psi", r"\Omega": "Omega",
 }
 
-_SUM_PATTERN = re.compile(r"""\\sum_\{([^}]*)\}\^\{([^}]*)\}""")
-
 def _strip_math_delims(s: str) -> str:
     s = s.strip()
-    if s.startswith("$$") and s.endswith("$$"):
-        return s[2:-2].strip()
-    if s.startswith("$") and s.endswith("$"):
-        return s[1:-1].strip()
+    if s.startswith("$$") and s.endswith("$$"): return s[2:-2].strip()
+    if s.startswith("$") and s.endswith("$"):  return s[1:-1].strip()
     return s
 
 def _rhs_of_equals(s: str) -> str:
@@ -169,19 +147,17 @@ def _rhs_of_equals(s: str) -> str:
 
 def _replace_text_vars(s: str) -> str:
     # \text{Trade Amount} -> TradeAmount
-    def joiner(m):
-        return re.sub(r"\s+", "", m.group(1))
+    def joiner(m): return re.sub(r"\s+", "", m.group(1))
     return re.sub(r"\\text\{([^}]*)\}", joiner, s)
 
 def _replace_greek(s: str) -> str:
-    for k, v in _GREEK.items():
-        s = s.replace(k, v)
+    for k, v in _GREEK.items(): s = s.replace(k, v)
     return s
 
 def _normalize_indices(s: str) -> str:
     # E[R_m] -> E_R_m ; A[B] -> A_B
     s = re.sub(r"([A-Za-z]+)\[([^\]]+)\]", lambda m: f"{m.group(1)}_{m.group(2)}", s)
-    # X_{a_b} -> X_a_b (remove braces)
+    # X_{a_b} -> X_a_b ; remove braces around subscripts
     s = re.sub(r"_\{([^}]+)\}", lambda m: "_" + m.group(1), s)
     # Collapse spaces around underscores
     s = re.sub(r"\s*_\s*", "_", s)
@@ -193,67 +169,64 @@ def _normalize_basic_ops(s: str) -> str:
     # Max/Min
     s = s.replace(r"\operatorname{Max}", "max").replace(r"\operatorname{Min}", "min")
     s = s.replace(r"\max", "max").replace(r"\min", "min")
-    # Remove \left \right and spacing macros
-    s = s.replace(r"\left", "").replace(r"\right", "")
-    s = s.replace(r"\,", "").replace(r"\;", "").replace(r"\:", "").replace(r"\ ", "")
+    # Remove size/spacing macros and \left/\right
+    for tok in [r"\left", r"\right", r"\Big", r"\big", r"\Bigg", r"\bigg", r"\!", r"\,", r"\;", r"\:", r"\ "]:
+        s = s.replace(tok, "")
     return s
 
-def _find_braced(s: str, i: int):
+def _find_braced(s: str, i: int) -> Tuple[str, int]:
     """Given s and index i at '{', return (content, end_index_of_closing_brace)."""
     assert s[i] == "{"
-    depth = 0
-    j = i
+    depth = 0; j = i
     while j < len(s):
-        if s[j] == "{":
-            depth += 1
+        if s[j] == "{": depth += 1
         elif s[j] == "}":
             depth -= 1
-            if depth == 0:
-                return s[i+1:j], j
+            if depth == 0: return s[i+1:j], j
         j += 1
     raise ValueError("Unbalanced braces in LaTeX")
 
 def _transform_frac(s: str) -> str:
     """Replace all \frac{A}{B} with ((A)/(B)), handling nesting."""
-    out = []
-    i = 0
+    out = []; i = 0
     while i < len(s):
         if s.startswith(r"\frac", i):
             i += len(r"\frac")
-            if i >= len(s) or s[i] != "{":
-                raise ValueError(r"Expected '{' after \frac")
-            num, j = _find_braced(s, i)
-            i = j + 1
-            if i >= len(s) or s[i] != "{":
-                raise ValueError(r"Expected '{' for denominator in \frac")
-            den, j = _find_braced(s, i)
-            i = j + 1
-            num = _transform_frac(num)
-            den = _transform_frac(den)
-            out.append(f"(({num})/({den}))")
+            if i >= len(s) or s[i] != "{": raise ValueError(r"Expected '{' after \frac")
+            num, j = _find_braced(s, i); i = j + 1
+            if i >= len(s) or s[i] != "{": raise ValueError(r"Expected '{' for denominator in \frac")
+            den, j = _find_braced(s, i); i = j + 1
+            out.append(f"(({_transform_frac(num)})/({_transform_frac(den)}))")
         else:
-            out.append(s[i])
-            i += 1
+            out.append(s[i]); i += 1
+    return "".join(out)
+
+def _transform_sqrt(s: str) -> str:
+    """Replace \sqrt{X} with ((X)**0.5)."""
+    out = []; i = 0
+    while i < len(s):
+        if s.startswith(r"\sqrt", i):
+            i += len(r"\sqrt")
+            if i >= len(s) or s[i] != "{": raise ValueError(r"Expected '{' after \sqrt")
+            inner, j = _find_braced(s, i)
+            i = j + 1
+            out.append(f"(({inner})**0.5)")
+        else:
+            out.append(s[i]); i += 1
     return "".join(out)
 
 def _transform_power_e(s: str) -> str:
-    """Handle e^{...} -> (e**(...)); then convert remaining '^' to '**'."""
-    out = []
-    i = 0
+    """Handle e^{...} -> (e**(...)). NOTE: does NOT convert '^' globally here."""
+    out = []; i = 0
     while i < len(s):
         if s.startswith("e^{", i):
-            i += 2  # skip 'e^'
-            if i >= len(s) or s[i] != "{":
-                raise ValueError("Malformed e^{...}")
-            inner, j = _find_braced(s, i)
-            i = j + 1
+            i += 2
+            if i >= len(s) or s[i] != "{": raise ValueError("Malformed e^{...}")
+            inner, j = _find_braced(s, i); i = j + 1
             out.append(f"(e**({inner}))")
         else:
-            out.append(s[i])
-            i += 1
-    s2 = "".join(out)
-    s2 = s2.replace("^", "**")
-    return s2
+            out.append(s[i]); i += 1
+    return "".join(out)
 
 def _normalize_funcs_to_python(s: str) -> str:
     # \log(x) -> math.log(x) | \exp(x) -> math.exp(x)
@@ -264,27 +237,25 @@ def _normalize_funcs_to_python(s: str) -> str:
 
 def _insert_implicit_mult(s: str) -> str:
     """
-    Insert '*' for implicit multiplication, while protecting real calls.
-    Examples covered: A(…), )( or )x, 2x, x y, (a+b)(c+d).
+    Insert '*' for implicit multiplication, while protecting true calls.
+    Uses a sentinel '⟬' to temporarily remove '(' from known calls so the
+    regex won't insert '*' between name and '('.
     """
-    # Protect known function-call prefixes so we don't insert before '('
     protos = {
-        "math.log(": "MATHLOG(",
-        "math.exp(": "MATHEXP(",
-        "max(": "MAXF(",
-        "min(": "MINF(",
+        "math.log(": "MATHLOG⟬",
+        "math.exp(": "MATHEXP⟬",
+        "max(": "MAXF⟬",
+        "min(": "MINF⟬",
     }
-    for k, v in protos.items():
-        s = s.replace(k, v)
+    for k, v in protos.items(): s = s.replace(k, v)
 
-    # A( -> A*( |  )( or )x -> )*x | 2x -> 2*x | x y -> x*y
+    # A( -> A*( ;  )( or )x -> )*x ; 2x -> 2*x ; x y -> x*y ; (a+b)(c+d) -> (a+b)*(c+d)
     s = re.sub(r'([0-9A-Za-z_)\]])\s*\(', r'\1*(', s)
     s = re.sub(r'\)\s*([0-9A-Za-z_])', r')*\1', s)
     s = re.sub(r'(\d)\s*([A-Za-z_])', r'\1*\2', s)
     s = re.sub(r'([A-Za-z_][A-Za-z_0-9]*)\s+([A-Za-z_])', r'\1*\2', s)
 
-    for k, v in protos.items():
-        s = s.replace(v, k)
+    for k, v in protos.items(): s = s.replace(v, k)
     return s
 
 def _strip_redundant_braces(s: str) -> str:
@@ -298,46 +269,93 @@ def _preprocess_base(latex: str) -> str:
     s = _normalize_indices(s)
     s = _normalize_basic_ops(s)
     s = _transform_frac(s)
-    s = _transform_power_e(s)
+    s = _transform_sqrt(s)
+    s = _transform_power_e(s)          # only e^{...}
     s = _normalize_funcs_to_python(s)
     s = _insert_implicit_mult(s)
     s = _strip_redundant_braces(s)
     return s.strip()
 
+def _caret_to_pow(s: str) -> str:
+    """Convert remaining '^' to Python '**' AFTER sums are expanded."""
+    return s.replace("^", "**")
+
 # ----------------------------------------------------------------------
-# Summation (\sum) support
+# Summation (\sum) support (accepts \sum_{i=1}^{N} and \sum_i=1^N)
 # ----------------------------------------------------------------------
-def _first_sum_occurrence(s: str):
-    m = _SUM_PATTERN.search(s)
-    if not m:
+def _parse_sum_header(s: str, start: int) -> Optional[Tuple[int, int, str, str, str]]:
+    """
+    Parse header at s[start:] where s[start:] starts with '\\sum_'.
+    Returns (hdr_start, hdr_end, var, lower_expr, upper_expr) or None.
+    """
+    if not s.startswith(r"\sum_", start):
         return None
-    hdr_start = m.start()
-    hdr_end = m.end()
-    sub = m.group(1)   # like i=1
-    sup = m.group(2)   # like n
+    i = start
+    hdr_start = i
+    i += len(r"\sum_")
 
-    if "=" not in sub:
-        raise ValueError(r"Summation lower bound must be like i=1")
-    var, start_expr = sub.split("=", 1)
-    var = var.strip()
-    start_expr = start_expr.strip()
-    end_expr = sup.strip()
+    # Lower bound: braced or unbraced (e.g., {i=1} or i=1)
+    if i < len(s) and s[i] == "{":
+        lower, j = _find_braced(s, i)
+        i = j + 1
+    else:
+        # read until '^'
+        j = i
+        while j < len(s) and s[j] != "^":
+            j += 1
+        lower = s[i:j].strip()
+        i = j
 
+    if i >= len(s) or s[i] != "^":
+        raise ValueError("Missing '^' in sum header")
+    i += 1  # skip '^'
+
+    # Upper bound: braced or bare token
+    if i < len(s) and s[i] == "{":
+        upper, j = _find_braced(s, i)
+        i = j + 1
+    else:
+        m = re.match(r"[A-Za-z0-9_]+", s[i:])
+        if not m:
+            raise ValueError("Missing/invalid upper bound in sum header")
+        upper = m.group(0)
+        i += len(upper)
+
+    # Parse lower into var=start
+    if "=" not in lower:
+        raise ValueError("Summation lower bound must be like i=1")
+    var, lower_expr = lower.split("=", 1)
+    var = var.strip(); lower_expr = lower_expr.strip()
+
+    hdr_end = i
+    return hdr_start, hdr_end, var, lower_expr, upper
+
+def _find_first_sum(s: str) -> Optional[Tuple[int, int, str, str, str, str, int]]:
+    """
+    Find first sum occurrence and capture body (braced or token).
+    Returns (hdr_start, hdr_end, var, lower_expr, upper_expr, body, end_after_body)
+    """
+    # Look for '\sum_' anywhere
+    m = re.search(r"\\sum_", s)
+    if not m: return None
+    parsed = _parse_sum_header(s, m.start())
+    if not parsed: return None
+    hdr_start, hdr_end, var, lower_expr, upper_expr = parsed
+
+    # Body starts at hdr_end
     if hdr_end >= len(s):
-        raise ValueError(r"Missing summation body after \sum")
+        raise ValueError("Missing summation body after \\sum")
     if s[hdr_end] == "{":
         body, body_end = _find_braced(s, hdr_end)
         end_after_body = body_end + 1
     else:
-        j = hdr_end
-        depth = 0
+        # capture token/expression until next top-level + or - (or end)
+        j = hdr_end; depth = 0
         while j < len(s):
             ch = s[j]
-            if ch in "([{":
-                depth += 1
+            if ch in "([{": depth += 1
             elif ch in ")]}":
-                if depth == 0:
-                    break
+                if depth == 0: break
                 depth -= 1
             elif ch in "+-" and depth == 0:
                 break
@@ -345,53 +363,53 @@ def _first_sum_occurrence(s: str):
         body = s[hdr_end:j].strip()
         end_after_body = j
 
-    return (hdr_start, hdr_end, var, start_expr, end_expr, body, end_after_body)
+    return hdr_start, hdr_end, var, lower_expr, upper_expr, body, end_after_body
 
 def _eval_one_sum(s: str, variables: Dict[str, float]) -> str:
-    occ = _first_sum_occurrence(s)
+    occ = _find_first_sum(s)
     if not occ:
         return s
-    hdr_start, hdr_end, var, start_expr, end_expr, body, end_after_body = occ
+    hdr_start, hdr_end, var, lower_expr, upper_expr, body, end_after_body = occ
 
     env = _build_env(variables)
-    start_py = _preprocess_base(start_expr)
-    end_py   = _preprocess_base(end_expr)
-    start_val = int(round(_safe_eval(start_py, env)))
-    end_val   = int(round(_safe_eval(end_py, env)))
 
-    body_py_raw = _preprocess_base(body)
+    # Preprocess lower/upper/body, then convert ^ → ** locally for eval
+    lower_py = _caret_to_pow(_preprocess_base(lower_expr))
+    upper_py = _caret_to_pow(_preprocess_base(upper_expr))
+    body_py  = _caret_to_pow(_preprocess_base(body))
+
+    start_val = int(round(_safe_eval(lower_py, env)))
+    end_val   = int(round(_safe_eval(upper_py, env)))
+
     total = 0.0
     for k in range(start_val, end_val + 1):
-        env_iter = dict(env)
-        env_iter[var] = k
-        total += float(_safe_eval(body_py_raw, env_iter))
+        env_iter = dict(env); env_iter[var] = k
+        total += float(_safe_eval(body_py, env_iter))
 
-    prefix = s[:hdr_start]
-    suffix = s[end_after_body:]
+    prefix = s[:hdr_start]; suffix = s[end_after_body:]
     return f"{prefix}({total}){suffix}"
 
 def _expand_all_sums(s: str, variables: Dict[str, float]) -> str:
-    prev = None
-    cur = s
-    safety = 0
+    prev = None; cur = s; safety = 0
     while prev != cur:
         safety += 1
         if safety > SUM_NEST_LIMIT:
             logger.warning("phase=sum_expand kind=LimitExceeded expr=%s", _short(cur))
-            break  # soft-fail: stop expanding rather than raising
+            break
         prev = cur
         try:
             cur = _eval_one_sum(cur, variables)
         except Exception as e:
             logger.debug("phase=sum_expand kind=%s msg=%s expr=%s",
                          type(e).__name__, _short(str(e)), _short(cur))
-            break  # soft-fail
+            break
     return cur
 
 # ----------------------------------------------------------------------
 # LaTeX → Python expression
 # ----------------------------------------------------------------------
 def latex_to_python_expr(latex: str, variables: Dict[str, float]) -> str:
+    # Stage 1: base transforms (NO global '^'→'**' here)
     try:
         s = _preprocess_base(latex)
         logger.debug("phase=preprocess ok expr=%s", _short(s))
@@ -400,6 +418,7 @@ def latex_to_python_expr(latex: str, variables: Dict[str, float]) -> str:
                        type(e).__name__, _short(str(e)), _short(latex))
         raise
 
+    # Stage 2: expand sums first (so '^' in headers is intact)
     try:
         s_exp = _expand_all_sums(s, variables)
         if s_exp != s:
@@ -410,6 +429,10 @@ def latex_to_python_expr(latex: str, variables: Dict[str, float]) -> str:
                        type(e).__name__, _short(str(e)), _short(s))
         raise
 
+    # Stage 3: now convert remaining '^' to '**'
+    s = _caret_to_pow(s)
+
+    # Stage 4: whitespace cleanup
     s = re.sub(r"\s+", "", s)
     return s
 
@@ -419,8 +442,7 @@ def latex_to_python_expr(latex: str, variables: Dict[str, float]) -> str:
 def _build_env(variables: Dict[str, float]) -> Dict[str, Any]:
     env = {"math": math, "max": max, "min": min}
     env.update({k: float(v) for k, v in variables.items()})
-    if "e" not in env:
-        env["e"] = math.e
+    if "e" not in env: env["e"] = math.e
     return env
 
 # ----------------------------------------------------------------------
@@ -458,14 +480,14 @@ class Sol:
             ttype = test.get("type", "compute")
             formula = test.get("formula", "")
             variables = test.get("variables", {})
-            if not isinstance(variables, dict):
-                variables = {}
+            if not isinstance(variables, dict): variables = {}
             if ttype != "compute":
-                logger.debug("Unsupported type '%s' in test '%s' — returning default.", ttype, name)
+                logger.debug("Unsupported type '%s' in test '%s' — defaulting.", ttype, name)
                 out.append({"result": float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")})
                 continue
             out.append({"result": self._evaluate_one(name, formula, variables)})
         return out
+
 
 
 # ------------------------- Flask Route -------------------------
