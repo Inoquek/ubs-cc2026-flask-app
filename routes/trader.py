@@ -279,33 +279,61 @@ def _normalize_symbolic_wrappers(s: str) -> str:
 
 def _insert_implicit_mult(s: str, aggressive: bool = False) -> str:
     """
-    Insert '*' for implicit multiplication, while protecting real calls.
-    'aggressive=False' avoids splitting complex identifiers (e.g., E_R_m).
-    'aggressive=True' additionally splits glued identifiers like bp -> b*p.
+    Insert '*' for implicit multiplication while keeping real function calls intact.
+    Strategy: perform generic insertions, then clean up accidental 'func*(' back to 'func('.
+    Also handle number + space + identifier (e.g., '**2  sigma' -> '**2*sigma').
     """
-    protos = {
-        "math.log(": "MATHLOG⟬",
-        "math.exp(": "MATHEXP⟬",
-        "max(": "MAXF⟬",
-        "min(": "MINF⟬",
-    }
-    for k, v in protos.items(): s = s.replace(k, v)
 
-    # 1) A( -> A*(
-    s = re.sub(r'([0-9A-Za-z_)\]])\s*\(', r'\1*(', s)
-    # 2) )( or )x -> )*x
-    s = re.sub(r'\)\s*([0-9A-Za-z_])', r')*\1', s)
-    # 3) 2x -> 2*x
+    # --- Generic insertions ---
+    # 1) number immediately followed by identifier: 2x -> 2*x
     s = re.sub(r'(\d)\s*([A-Za-z_])', r'\1*\2', s)
-    # 4) x y -> x*y
+
+    # 2) identifier (or ')', ']' ) followed by '(' => insert '*' unless it's part of a function name (we'll clean after)
+    s = re.sub(r'([0-9A-Za-z_)\]])\s*\(', r'\1*(', s)
+
+    # 3) closing paren followed by identifier: ')x' -> ')*x'
+    s = re.sub(r'\)\s*([A-Za-z_])', r')*\1', s)
+
+    # 4) identifier whitespace identifier: 'x y' -> 'x*y'
     s = re.sub(r'([A-Za-z_][A-Za-z_0-9]*)\s+([A-Za-z_])', r'\1*\2', s)
 
-    if aggressive:
-        # 5) xy (adjacent identifiers) -> x*y, but DON'T split if left ends with '_'
-        s = re.sub(r'([A-Za-z_][A-Za-z0-9]*[A-Za-z0-9])(?=[A-Za-z])', r'\1*', s)
+    # NOTE: (2) + (4) will create 'func*(' for real calls; fix those next.
 
-    for k, v in protos.items(): s = s.replace(v, k)
+    # --- Clean-up for known function-call patterns ---
+    # keep this list in sync with what you emit elsewhere
+    _FUNC_PREFIXES = [
+        'max', 'min', 'math.log', 'math.exp'
+    ]
+    for f in _FUNC_PREFIXES:
+        s = s.replace(f + '*(', f + '(')
+
+    # If aggressive splitting is requested, only split **when** every character is a known one-letter variable.
+    # This prevents 'gamma' -> 'g*a*m*m*a' and 'epsilon' -> 'e*p*s*i*l*o*n'.
+    if aggressive:
+        def split_if_all_single_letter_vars(m: re.Match) -> str:
+            tok = m.group(0)
+            # do not split if tok is already in the environment later (e.g., 'gamma') – we can't see env here,
+            # so use a conservative heuristic: never split if '_' exists or length > 4 (very likely a real name)
+            if "_" in tok or len(tok) > 4:
+                return tok
+            # split only if token is pure letters AND looks like concatenation of single-letter vars
+            # (typical case: 'bp', 'qr', 'abp')
+            pieces = []
+            for i, ch in enumerate(tok):
+                if i > 0:
+                    pieces.append('*')
+                pieces.append(ch)
+            return "".join(pieces)
+
+        # apply only to short, pure-alpha tokens not already handled
+        s = re.sub(r'\b[A-Za-z]{2,4}\b', split_if_all_single_letter_vars, s)
+
+        # but if we accidentally split known builtins/funcs, revert them
+        for f in ['max', 'min', 'math', 'log', 'exp', 'e']:
+            s = s.replace('*'.join(list(f)), f)
+
     return s
+
 
 def _strip_redundant_braces(s: str) -> str:
     return s
@@ -340,9 +368,57 @@ def _caret_to_pow(s: str) -> str:
     s2 = "".join(out)
     return s2.replace("^", "**")
 
+def _split_at_top_level_comma(s: str) -> Tuple[str, Optional[str]]:
+    """
+    Split at the first top-level comma: return (main_expr, trailing_part_or_None).
+    """
+    depth = 0
+    for idx, ch in enumerate(s):
+        if ch in "([{": depth += 1
+        elif ch in ")]}": depth = max(0, depth - 1)
+        elif ch == "," and depth == 0:
+            return s[:idx].strip(), s[idx+1:].strip()
+    return s.strip(), None
+
+def _apply_trailing_constraints(main_expr: str, trailing: Optional[str]) -> str:
+    """
+    Parse simple 'a=expr, b=expr2' constraints and inline-substitute them
+    into main_expr. We preprocess RHS minimally (LaTeX→python) so things like '1-p'
+    or 'r t_i' are handled.
+    """
+    if not trailing:
+        return main_expr
+
+    # Split by top-level commas to get assignments
+    parts = _split_top_level_commas(trailing)
+    assigns: List[Tuple[str, str]] = []
+    for p in parts:
+        if "=" not in p:
+            continue
+        lhs, rhs = p.split("=", 1)
+        lhs = lhs.strip()
+        rhs = rhs.strip()
+        if not lhs:
+            continue
+        # Preprocess RHS lightly
+        rhs_py = _preprocess_base(rhs, aggressive=False)
+        rhs_py = _caret_to_pow(rhs_py)
+        assigns.append((lhs, rhs_py))
+
+    # Inline substitute with word boundaries, wrapping RHS in parens
+    for lhs, rhs_py in assigns:
+        main_expr = re.sub(rf'\b{re.escape(lhs)}\b', f'({rhs_py})', main_expr)
+
+    return main_expr
+
 def _preprocess_base(latex: str, aggressive: bool = False) -> str:
     s = _strip_math_delims(latex)
-    s = _rhs_of_equals(s)
+    
+    # Split into "expr" and optional trailing constraints and apply them
+    expr, trailing = _split_at_top_level_comma(s)
+    expr = _rhs_of_equals(expr)
+    expr = _apply_trailing_constraints(expr, trailing)
+    
     s = _drop_trailing_constraints(s)          # e.g., ", q=1-p"
     s = _replace_text_vars(s)
     s = _replace_greek(s)
@@ -489,6 +565,8 @@ def latex_to_python_expr(latex: str, variables: Dict[str, float], aggressive: bo
 # ----------------------------------------------------------------------
 def _build_env(variables: Dict[str, float]) -> Dict[str, Any]:
     env = {"math": math, "max": max, "min": min}
+    # Optional aliases (just in case a user writes ln instead of \ln after preprocess)
+    env["ln"] = math.log
     # keep floats for numeric vars; non-numeric will raise cleanly at eval
     for k, v in (variables or {}).items():
         try:
