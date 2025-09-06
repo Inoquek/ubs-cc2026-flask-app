@@ -379,7 +379,7 @@ def _drop_trailing_constraints(s: str) -> str:
         elif ch == "," and depth == 0:
             return s[:idx].strip()
     return s
-r
+
 def _parse_sum_header(s: str, start: int) -> Optional[Tuple[int, int, str, str, str]]:
     if not s.startswith(r"\sum_", start): return None
     i = start; hdr_start = i; i += len(r"\sum_")
@@ -465,6 +465,7 @@ def _expand_all_sums(s: str, variables: Dict[str, float]) -> str:
         prev = cur
         cur = _eval_one_sum(cur, variables)
     return cur
+
 def _resolve_free_i_with_N(s: str, variables: Dict[str, float]) -> str:
     if "N" not in variables: return s
     N = int(round(float(variables["N"])))
