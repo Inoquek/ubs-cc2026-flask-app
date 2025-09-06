@@ -5,6 +5,7 @@ from flask import request, jsonify
 import math
 from routes import app
 import json
+import re
 import ast
 logger = logging.getLogger(__name__)
 
