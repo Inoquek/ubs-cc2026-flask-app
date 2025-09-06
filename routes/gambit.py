@@ -14,55 +14,51 @@ def solve_case(case):
     fronts = case["fronts"]
     stamina_max = case["stamina"]
 
-    # Lightweight validation
-    if reserve <= 0 or stamina_max <= 0 or fronts <= 0:
-        raise ValueError("reserve, stamina, and fronts must be positive.")
-    
-    for f, mp in intel:
-        if not (1 <= f <= fronts):
-            raise ValueError(f"front {f} out of range 1..{fronts}")
-        if not (1 <= mp <= reserve):
-            raise ValueError(f"mp cost {mp} out of range 1..{reserve}")
-
     time = 0
     mp = reserve
     stamina = stamina_max
-
-    # Track whether the previous action was an ATTACK (not a cooldown)
-    # and on which front. Only then can we apply the 0-minute "extend AOE".
     prev_action_attack = False
     last_front = None
 
-    for front, mp_cost in intel:
-        # If we can't cast the next spell, cooldown first.
+    logger.info({"event": "case_start", "reserve": reserve, "fronts": fronts,
+                 "stamina": stamina_max, "intel_len": len(intel)})
+
+    for idx, (front, mp_cost) in enumerate(intel, start=1):
+        logger.info({"event": "consider_spell", "seq": idx, "front": front,
+                     "mp_cost": mp_cost, "time": time, "mp": mp, "stamina": stamina})
+
         if mp_cost > mp or stamina == 0:
-            time += COOLDOWN_MINUTES
+            logger.info({"event": "cooldown_needed", "seq": idx,
+                         "reason": "mp" if mp_cost > mp else "stamina",
+                         "time_before": time, "mp_before": mp, "stamina_before": stamina})
+            time += 10
             mp = reserve
             stamina = stamina_max
-            prev_action_attack = False  # breaks the "extend AOE" chain
+            prev_action_attack = False
+            logger.info({"event": "cooldown_done", "seq": idx,
+                         "time_after": time, "mp_after": mp, "stamina_after": stamina})
 
-        # Perform the attack
         mp -= mp_cost
         stamina -= 1
 
-        # Time cost: 0 if immediately after an attack on the same front;
-        # otherwise 10 minutes (retargeting / first attack in a chain).
         if prev_action_attack and last_front == front:
-            # extend AOE — no extra time
-            pass
+            logger.info({"event": "attack_extend", "seq": idx, "front": front,
+                         "mp_cost": mp_cost, "time": time, "mp_left": mp, "stamina_left": stamina})
         else:
-            time += ATTACK_MINUTES
+            time += 10
+            logger.info({"event": "attack_new", "seq": idx, "front": front,
+                         "mp_cost": mp_cost, "time": time, "mp_left": mp, "stamina_left": stamina})
 
         prev_action_attack = True
         last_front = front
 
-    # Must be in cooldown state at the end (to join expedition ready)
-    time += COOLDOWN_MINUTES
-    prev_action_attack = False  # for completeness
+    logger.info({"event": "final_cooldown_before", "time": time, "mp": mp, "stamina": stamina})
+    time += 10
+    logger.info({"event": "final_cooldown_after", "time": time})
 
-    # Optional: compare with provided expected, log mismatch
     if "expected" in case and case["expected"] != time:
-        logger.info(case, got=time, expected=case["expected"])
+        logger.info({"event": "test_failed", "expected": case["expected"], "got": time,
+                     "reserve": reserve, "fronts": fronts, "stamina": stamina_max})
 
     return {"time": time}
 
