@@ -80,9 +80,13 @@ def _safe_eval(expr: str, env: Dict[str, Any]) -> float:
             if not (isinstance(node.value, ast.Name) and node.value.id == "math"):
                 raise ValueError("Only math.<attr> is allowed")
             return
-        if isinstance(node, _ALLOWED_NODES):
-            for child in ast.iter_child_nodes(node): _check(child)
+        if isinstance(node, (ast.Name, ast.Constant)):
             return
+        if isinstance(node, (ast.Tuple, ast.List)):
+            for ch in ast.iter_child_nodes(node): _check(ch)
+            return
+        if isinstance(node, ast.Expression):
+            _check(node.body); return
         raise ValueError(f"Disallowed expression node: {type(node).__name__}")
 
     tree = ast.parse(expr, mode="eval")
@@ -104,6 +108,11 @@ _GREEK = {
     r"\Phi": "Phi", r"\Psi": "Psi", r"\Omega": "Omega",
 }
 
+_SPACING_TOKENS = [
+    r"\left", r"\right", r"\Big", r"\big", r"\Bigg", r"\bigg",
+    r"\!", r"\,", r"\;", r"\:", r"\ ", r"\quad", r"\qquad"
+]
+
 def _strip_math_delims(s: str) -> str:
     s = s.strip()
     if s.startswith("$$") and s.endswith("$$"): return s[2:-2].strip()
@@ -113,27 +122,19 @@ def _strip_math_delims(s: str) -> str:
 def _rhs_of_equals(s: str) -> str:
     return s.split("=", 1)[1].strip() if "=" in s else s
 
-def _drop_trailing_constraints(s: str) -> str:
-    """Drop anything after a top-level comma: 'expr , something' -> 'expr'."""
-    depth = 0
-    for idx, ch in enumerate(s):
-        if ch in "([{": depth += 1
-        elif ch in ")]}": depth = max(0, depth - 1)
-        elif ch == "," and depth == 0:
-            return s[:idx].strip()
-    return s
-
-def _replace_text_vars(s: str) -> str:
-    # \text{Trade Amount} -> TradeAmount
+def _replace_text_like(s: str) -> str:
+    # \text{Trade Amount} -> TradeAmount ; \mathrm{NPV} -> NPV
     def joiner(m): return re.sub(r"\s+", "", m.group(1))
-    return re.sub(r"\\text\{([^}]*)\}", joiner, s)
+    s = re.sub(r"\\text\{([^}]*)\}", joiner, s)
+    s = re.sub(r"\\mathrm\{([^}]*)\}", joiner, s)
+    return s
 
 def _replace_greek(s: str) -> str:
     for k, v in _GREEK.items(): s = s.replace(k, v)
     return s
 
 def _resolve_t_subscripts(s: str, default_t: int = 1) -> str:
-    """Turn _{t-k} -> _<default_t-k>, and _{t} -> _<default_t>.  (Before we strip braces.)"""
+    """Turn _{t-k} -> _<default_t-k>, and _{t} -> _<default_t>."""
     def repl_minus(m):
         k = int(m.group(1))
         return f"_{max(default_t - k, 0)}"
@@ -142,22 +143,21 @@ def _resolve_t_subscripts(s: str, default_t: int = 1) -> str:
     return s
 
 def _normalize_indices(s: str) -> str:
-    # E[R_m] -> E_R_m ; A[B] -> A_B
+    # E[R_m] -> E_R_m ; A[B] -> A_B ; X_{a_b} -> X_a_b
     s = re.sub(r"([A-Za-z]+)\[([^\]]+)\]", lambda m: f"{m.group(1)}_{m.group(2)}", s)
-    # X_{a_b} -> X_a_b ; remove braces around subscripts
     s = re.sub(r"_\{([^}]+)\}", lambda m: "_" + m.group(1), s)
-    # Collapse spaces around underscores
     s = re.sub(r"\s*_\s*", "_", s)
     return s
 
 def _normalize_basic_ops(s: str) -> str:
     # Multiplication
-    s = s.replace(r"\cdot", "*").replace(r"\times", "*")
-    # Max/Min
+    s = s.replace(r"\cdot", "*").replace(r"\times", "*").replace(r"\cdotp", "*")
+    # Max/Min (and generic \operatorname{Foo} -> Foo)
     s = s.replace(r"\operatorname{Max}", "max").replace(r"\operatorname{Min}", "min")
     s = s.replace(r"\max", "max").replace(r"\min", "min")
-    # Remove size/spacing macros and \left/\right
-    for tok in [r"\left", r"\right", r"\Big", r"\big", r"\Bigg", r"\bigg", r"\!", r"\,", r"\;", r"\:", r"\ "]:
+    s = re.sub(r"\\operatorname\{([^}]+)\}", r"\1", s)
+    # Remove size/spacing macros
+    for tok in _SPACING_TOKENS:
         s = s.replace(tok, "")
     return s
 
@@ -203,7 +203,7 @@ def _transform_sqrt(s: str) -> str:
     return "".join(out)
 
 def _transform_power_e(s: str) -> str:
-    """Handle e^{...} -> (e**(...)). We convert other '^' later, after sums."""
+    """Handle e^{...} -> (e**(...)). Other '^' converted later."""
     out = []; i = 0
     while i < len(s):
         if s.startswith("e^{", i):
@@ -216,14 +216,13 @@ def _transform_power_e(s: str) -> str:
     return "".join(out)
 
 def _normalize_funcs_to_python(s: str) -> str:
-    # \log(x) -> math.log(x) | \exp(x) -> math.exp(x)
-    s = s.replace(r"\log", "log").replace(r"\exp", "exp")
+    # \log(x)/\ln(x) -> math.log(x); \exp(x) -> math.exp(x)
+    s = s.replace(r"\log", "log").replace(r"\exp", "exp").replace(r"\ln", "log")
     s = re.sub(r"(?<![A-Za-z0-9_])log\s*\(", "math.log(", s)
     s = re.sub(r"(?<![A-Za-z0-9_])exp\s*\(", "math.exp(", s)
     return s
 
 def _clean_ident_piece(x: str) -> str:
-    # Keep letters, digits, underscore; drop everything else
     return re.sub(r"[^A-Za-z0-9_]+", "", x)
 
 def _find_paren_group(s: str, i: int) -> Tuple[str, int]:
@@ -279,61 +278,45 @@ def _normalize_symbolic_wrappers(s: str) -> str:
 
 def _insert_implicit_mult(s: str, aggressive: bool = False) -> str:
     """
-    Insert '*' for implicit multiplication while keeping real function calls intact.
-    Strategy: perform generic insertions, then clean up accidental 'func*(' back to 'func('.
-    Also handle number + space + identifier (e.g., '**2  sigma' -> '**2*sigma').
+    Insert '*' for implicit multiplication while preserving function calls.
+    Uses ASCII placeholders and guarantees restoration.
     """
+    # ASCII placeholders for calls we must not split
+    protos = {
+        "math.log(": "<MATH_LOG>(",
+        "math.exp(": "<MATH_EXP>(",
+        "max(":      "<MAX>(",
+        "min(":      "<MIN>(",
+    }
+    for k, v in protos.items():
+        s = s.replace(k, v)
 
-    # --- Generic insertions ---
     # 1) number immediately followed by identifier: 2x -> 2*x
     s = re.sub(r'(\d)\s*([A-Za-z_])', r'\1*\2', s)
 
-    # 2) identifier (or ')', ']' ) followed by '(' => insert '*' unless it's part of a function name (we'll clean after)
+    # 2) identifier or ) or ] followed by '(' : A( -> A*(
     s = re.sub(r'([0-9A-Za-z_)\]])\s*\(', r'\1*(', s)
 
-    # 3) closing paren followed by identifier: ')x' -> ')*x'
+    # 3) ')' followed by identifier: ')x' -> ')*x'
     s = re.sub(r'\)\s*([A-Za-z_])', r')*\1', s)
 
     # 4) identifier whitespace identifier: 'x y' -> 'x*y'
     s = re.sub(r'([A-Za-z_][A-Za-z_0-9]*)\s+([A-Za-z_])', r'\1*\2', s)
 
-    # NOTE: (2) + (4) will create 'func*(' for real calls; fix those next.
-
-    # --- Clean-up for known function-call patterns ---
-    # keep this list in sync with what you emit elsewhere
-    _FUNC_PREFIXES = [
-        'max', 'min', 'math.log', 'math.exp'
-    ]
-    for f in _FUNC_PREFIXES:
-        s = s.replace(f + '*(', f + '(')
-
-    # If aggressive splitting is requested, only split **when** every character is a known one-letter variable.
-    # This prevents 'gamma' -> 'g*a*m*m*a' and 'epsilon' -> 'e*p*s*i*l*o*n'.
     if aggressive:
-        def split_if_all_single_letter_vars(m: re.Match) -> str:
+        # Split very short glued tokens like 'bp' -> 'b*p', but never split long, real names.
+        def split_short_token(m: re.Match) -> str:
             tok = m.group(0)
-            # do not split if tok is already in the environment later (e.g., 'gamma') – we can't see env here,
-            # so use a conservative heuristic: never split if '_' exists or length > 4 (very likely a real name)
             if "_" in tok or len(tok) > 4:
                 return tok
-            # split only if token is pure letters AND looks like concatenation of single-letter vars
-            # (typical case: 'bp', 'qr', 'abp')
-            pieces = []
-            for i, ch in enumerate(tok):
-                if i > 0:
-                    pieces.append('*')
-                pieces.append(ch)
-            return "".join(pieces)
+            return "*".join(list(tok))
+        s = re.sub(r'\b[A-Za-z]{2,4}\b', split_short_token, s)
 
-        # apply only to short, pure-alpha tokens not already handled
-        s = re.sub(r'\b[A-Za-z]{2,4}\b', split_if_all_single_letter_vars, s)
-
-        # but if we accidentally split known builtins/funcs, revert them
-        for f in ['max', 'min', 'math', 'log', 'exp', 'e']:
-            s = s.replace('*'.join(list(f)), f)
+    # restore function calls
+    for k, v in protos.items():
+        s = s.replace(v, k)
 
     return s
-
 
 def _strip_redundant_braces(s: str) -> str:
     return s
@@ -368,74 +351,56 @@ def _caret_to_pow(s: str) -> str:
     s2 = "".join(out)
     return s2.replace("^", "**")
 
-def _split_at_top_level_comma(s: str) -> Tuple[str, Optional[str]]:
-    """
-    Split at the first top-level comma: return (main_expr, trailing_part_or_None).
-    """
+# ----------------------------------------------------------------------
+# Constraint handling (split once, apply once)
+# ----------------------------------------------------------------------
+def _split_top_level_comma_once(s: str) -> Tuple[str, Optional[str]]:
     depth = 0
-    for idx, ch in enumerate(s):
+    for i, ch in enumerate(s):
         if ch in "([{": depth += 1
         elif ch in ")]}": depth = max(0, depth - 1)
         elif ch == "," and depth == 0:
-            return s[:idx].strip(), s[idx+1:].strip()
+            return s[:i].strip(), s[i+1:].strip()
     return s.strip(), None
 
-def _apply_trailing_constraints(main_expr: str, trailing: Optional[str]) -> str:
-    """
-    Parse simple 'a=expr, b=expr2' constraints and inline-substitute them
-    into main_expr. We preprocess RHS minimally (LaTeX→python) so things like '1-p'
-    or 'r t_i' are handled.
-    """
-    if not trailing:
-        return main_expr
+def _latex_rhs_to_python(rhs: str) -> str:
+    """Lightweight LaTeX→python for RHS of constraints (no sums)."""
+    t = rhs.strip()
+    t = _replace_text_like(t)
+    t = _replace_greek(t)
+    t = _resolve_t_subscripts(t, default_t=1)
+    t = _normalize_indices(t)
+    t = _normalize_basic_ops(t)
+    t = _transform_frac(t)
+    t = _transform_sqrt(t)
+    t = _transform_power_e(t)
+    t = _normalize_funcs_to_python(t)
+    t = _caret_to_pow(t)
+    t = t.replace("{", "(").replace("}", ")")
+    t = _insert_implicit_mult(t, aggressive=False)
+    t = re.sub(r"\s+", "", t)
+    return t
 
-    # Split by top-level commas to get assignments
+def _apply_trailing_constraints_once(expr: str, trailing: Optional[str]) -> str:
+    if not trailing:
+        return expr
     parts = _split_top_level_commas(trailing)
     assigns: List[Tuple[str, str]] = []
     for p in parts:
         if "=" not in p:
             continue
         lhs, rhs = p.split("=", 1)
-        lhs = lhs.strip()
-        rhs = rhs.strip()
+        lhs, rhs = lhs.strip(), rhs.strip()
         if not lhs:
             continue
-        # Preprocess RHS lightly
-        rhs_py = _preprocess_base(rhs, aggressive=False)
-        rhs_py = _caret_to_pow(rhs_py)
+        rhs_py = _latex_rhs_to_python(rhs)
         assigns.append((lhs, rhs_py))
-
-    # Inline substitute with word boundaries, wrapping RHS in parens
     for lhs, rhs_py in assigns:
-        main_expr = re.sub(rf'\b{re.escape(lhs)}\b', f'({rhs_py})', main_expr)
-
-    return main_expr
-
-def _preprocess_base(latex: str, aggressive: bool = False) -> str:
-    s = _strip_math_delims(latex)
-    
-    # Split into "expr" and optional trailing constraints and apply them
-    expr, trailing = _split_at_top_level_comma(s)
-    expr = _rhs_of_equals(expr)
-    expr = _apply_trailing_constraints(expr, trailing)
-    
-    s = _drop_trailing_constraints(s)          # e.g., ", q=1-p"
-    s = _replace_text_vars(s)
-    s = _replace_greek(s)
-    s = _resolve_t_subscripts(s, default_t=1)  # _{t-1}, _{t}
-    s = _normalize_indices(s)
-    s = _normalize_basic_ops(s)
-    s = _normalize_symbolic_wrappers(s)        # Cov(...), Var(...)
-    s = _transform_frac(s)
-    s = _transform_sqrt(s)
-    s = _transform_power_e(s)                  # e^{...}
-    s = _normalize_funcs_to_python(s)          # \log, \exp
-    s = _insert_implicit_mult(s, aggressive=aggressive)
-    s = _strip_redundant_braces(s)
-    return s.strip()
+        expr = re.sub(rf'\b{re.escape(lhs)}\b', f'({rhs_py})', expr)
+    return expr
 
 # ----------------------------------------------------------------------
-# Summation (\sum) support (accepts \sum_{i=1}^{N} and \sum_i=1^N)
+# Summation (\sum) support
 # ----------------------------------------------------------------------
 def _parse_sum_header(s: str, start: int) -> Optional[Tuple[int, int, str, str, str]]:
     if not s.startswith(r"\sum_", start): return None
@@ -518,14 +483,12 @@ def _eval_one_sum(s: str, variables: Dict[str, float], aggressive: bool = False)
     start_val = int(round(_safe_eval(lower_py, env)))
     end_val   = int(round(_safe_eval(upper_py, env)))
 
-    # identifiers like CF_t, PD_i, Var_r_i → replace final _<var> with _<k>
     patt = re.compile(rf"\b([A-Za-z][A-Za-z0-9_]*)_{var}\b")
 
     total = 0.0
     for k in range(start_val, end_val + 1):
         env_iter = dict(env); env_iter[var] = k
         body_k = patt.sub(rf"\1_{k}", body_py)
-        # also apply keyword aliasing inside the body (for safety)
         body_k, alias_map = _rename_keywords_in_expr(body_k, variables)
         env_iter = _apply_alias_env(env_iter, alias_map)
         total += float(_safe_eval(body_k, env_iter))
@@ -551,6 +514,31 @@ def _resolve_free_i_with_N(s: str, variables: Dict[str, float]) -> str:
 # ----------------------------------------------------------------------
 # LaTeX → Python expression
 # ----------------------------------------------------------------------
+def _preprocess_base(latex: str, aggressive: bool = False) -> str:
+    s = _strip_math_delims(latex)
+
+    # Extract main expr and optional trailing constraints ONCE
+    main, trailing = _split_top_level_comma_once(s)
+    main = _rhs_of_equals(main)  # drop LHS like "X ="
+
+    # Inline constraints (e.g., ", q=1-p") before any other transforms
+    main = _apply_trailing_constraints_once(main, trailing)
+
+    # Normal pipeline on the substituted main expression
+    s = _replace_text_like(main)
+    s = _replace_greek(s)
+    s = _resolve_t_subscripts(s, default_t=1)
+    s = _normalize_indices(s)
+    s = _normalize_basic_ops(s)
+    s = _normalize_symbolic_wrappers(s)
+    s = _transform_frac(s)
+    s = _transform_sqrt(s)
+    s = _transform_power_e(s)
+    s = _normalize_funcs_to_python(s)
+    s = _insert_implicit_mult(s, aggressive=aggressive)
+    s = s.strip()
+    return s
+
 def latex_to_python_expr(latex: str, variables: Dict[str, float], aggressive: bool = False) -> str:
     s = _preprocess_base(latex, aggressive=aggressive)
     s = _expand_all_sums(s, variables, aggressive=aggressive)
@@ -565,7 +553,7 @@ def latex_to_python_expr(latex: str, variables: Dict[str, float], aggressive: bo
 # ----------------------------------------------------------------------
 def _build_env(variables: Dict[str, float]) -> Dict[str, Any]:
     env = {"math": math, "max": max, "min": min}
-    # Optional aliases (just in case a user writes ln instead of \ln after preprocess)
+    # Optional alias
     env["ln"] = math.log
     # keep floats for numeric vars; non-numeric will raise cleanly at eval
     for k, v in (variables or {}).items():
@@ -589,14 +577,10 @@ class Sol:
         # ---- PASS 1: safe (no glued-identifier split) ----
         try:
             expr = latex_to_python_expr(formula, variables, aggressive=False)
-        except Exception:
-            # If transform fails, try aggressive transform before giving up
-            try:
-                expr = latex_to_python_expr(formula, variables, aggressive=True)
-            except Exception as e2:
-                _log_failed_test(name, formula, variables, ttype, phase="transform",
-                                 kind=type(e2).__name__, msg=str(e2))
-                return float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")
+        except Exception as e2:
+            _log_failed_test(name, formula, variables, ttype, phase="transform",
+                             kind=type(e2).__name__, msg=str(e2))
+            return float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")
 
         env = _build_env(variables)
         expr1, alias_map1 = _rename_keywords_in_expr(expr, variables)
@@ -605,7 +589,9 @@ class Sol:
             val = _safe_eval(expr1, env1)
             return float(f"{float(val):.{ROUND_DP}f}")
         except Exception:
-            # ---- PASS 2: aggressive (split glued identifiers like 'bp' -> 'b*p') ----
+            # helpful debug of final expr
+            logger.debug(f"[debug] name={name} expr_after_preprocess={expr1}")
+            # ---- PASS 2: aggressive (split short glued identifiers like 'bp' -> 'b*p') ----
             try:
                 expr2 = latex_to_python_expr(formula, variables, aggressive=True)
                 expr2, alias_map2 = _rename_keywords_in_expr(expr2, variables)
@@ -632,18 +618,19 @@ class Sol:
                 continue
             out.append({"result": self._evaluate_one(name, ttype, formula, variables)})
         return out
-    
+
 # ------------------------- Flask Route -------------------------
 @app.route('/trading-formula', methods=['POST'])
 def trader():
     """
-    Accepts: JSON array of testcases.
-    Returns: 200 + JSON array of {"result": number} for each testcase.
-    This endpoint NEVER aborts the whole batch due to a single bad testcase.
+    POST /trading-formula
+    Content-Type: application/json
+    Body: JSON array of testcases: [{"name","formula","variables","type": "compute"}, ...]
+    Response: 200 + JSON array [{"result": <float rounded to 4 dp>}, ...]
+    Soft-fails per testcase and logs only failed ones.
     """
     tests = request.get_json(silent=True)
     if not isinstance(tests, list):
-        # Soft behavior: if payload is not a list, respond with empty result list (still 200)
         logger.debug("Payload is not a list — returning empty result set.")
         return jsonify([]), 200
 
