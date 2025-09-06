@@ -8,18 +8,20 @@ from routes import app
 
 # hz naschest 6,7,
 # definitely correct 3,1,2,2,3, ... , 4 , 5, 4,3,3, , ,  
-_RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,4,4,5,4,3,  3, 3,      1,2,     2    , 1, 1,2, -1, 1,     -1,2,-1,4,2")
+_RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,4,4,5,4,3,  3, 3,      1,    1,2    , 1, 1,2, -1, 1,     -1,2,-1,4,2")
 
 # new changes (not confident in them)
 # Q.24 - 4 IS CORRECT
 # Q.19 - trying 2(deleting this one)
 # Q.11 - 3 IS CORRECT
 # Q.12 - 3 IS CORRECT
+# Q.14 - 1 IS CORRECT
 # Q.21 - 4 (deleting)
 
-# Q.13 - -1 (not answered yet)
-# Q.14 - -1 (not answered yet)
-# TRYING Q.13, 14
+
+# Q.13 - 2
+# Q.23 - 2
+# TRYING Q.13, Q.23
 
 # -1 if dk the answer yet
 # everything else is correct so far
