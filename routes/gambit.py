@@ -28,7 +28,7 @@ def solve_case(case):
 
     for front, mp_cost in intel:
         # If the next attack doesn't fit, cooldown until it does
-        if mp_cost > mp or stamina == 0 or stamina < front:
+        if mp_cost > mp or stamina == 0:
             mp = reserve
             stamina = stamina_max
             time += COOLDOWN_MINUTES
@@ -38,6 +38,8 @@ def solve_case(case):
         stamina -= 1
         time += ATTACK_MINUTES
 
+    if mp == 0 or stamina == 0:
+        time += COOLDOWN_MINUTES 
     return {"time": time}
 
 @app.route("/the-mages-gambit", methods=["POST"])
