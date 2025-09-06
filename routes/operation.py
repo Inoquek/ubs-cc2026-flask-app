@@ -26,36 +26,20 @@ def challenge1_calc(data) :
                 words[index] = word[::-1]
 
         elif transform == "encode_mirror_alphabet":
-            
-            logger.info("hmmm")
             for index, word in enumerate(words):
-                new_word = ""
-                for i in range(len(word)):
-                    if (word[i] >= 'a' and word[i] <= 'z') :
-                        start = 'a'
-                        end = 'z'
-                    else :
-                        start = 'A'
-                        end = 'Z'
-                    new_word += chr(ord(end) - (ord(word[i]) - ord(start)))
-
-                words[index] = new_word
-                logger.info(new_word)
-
-            logger.info(words)
+                new_word = []
+                for ch in word:
+                    if 'a' <= ch <= 'z':
+                        new_word.append(chr(ord('z') - (ord(ch) - ord('a'))))
+                    elif 'A' <= ch <= 'Z':
+                        new_word.append(chr(ord('Z') - (ord(ch) - ord('A'))))
+                    else:
+                        # leave digits, underscores, punctuation, spaces, etc. AS-IS
+                        new_word.append(ch)
+                words[index] = "".join(new_word)
         elif transform == "toggle_case":
-
             for index, word in enumerate(words):
-                new_word = ""
-                for i in range(len(word)):
-                    if (word[i] >= 'a' and word[i] <= 'z') :
-                        start = 'a'
-                        startOther = 'A'
-                    else :
-                        start = 'A'
-                        startOther = 'a'
-                    new_word += chr(ord(startOther) + (ord(word[i]) - ord(start)))
-                words[index] = new_word
+                words[index] = word.swapcase()
         elif transform == "swap_pairs":
 
             for index, word in enumerate(words):
@@ -85,15 +69,27 @@ def challenge1_calc(data) :
                 words[index] = new_word
 
         elif transform == "double_consonants":
+            # collapse doubled consonants; preserve vowels and non-letters
+            VOWELS = set("aeiouAEIOU")
+
+            def undouble_one(w: str) -> str:
+                out = []
+                i = 0
+                n = len(w)
+                while i < n:
+                    ch = w[i]
+                    if ch.isalpha() and ch not in VOWELS:
+                        # If doubled (same next char), collapse; else keep
+                        if i + 1 < n and w[i + 1] == ch:
+                            out.append(ch)
+                            i += 2
+                            continue
+                    out.append(ch)
+                    i += 1
+                return "".join(out)
+
             for index, word in enumerate(words):
-                new_word = ""
-                for i in range(len(word)):
-                    if word[i] in set(['a', 'o', 'e', 'u', 'i']):
-                        new_word += word[i]
-                    elif i % 2 == 0:
-                        new_word += word[i]
-                words[index] = new_word
-        
+                words[index] = undouble_one(word)
         return words
     
     for transform in transformations:
