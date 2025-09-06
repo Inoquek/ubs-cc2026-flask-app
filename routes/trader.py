@@ -340,11 +340,11 @@ def _normalize_funcs_to_python(s: str) -> str:
     s = re.sub(r"(?<![A-Za-z0-9_])exp\s*\(", "math.exp(", s)
     return s
 
-def _insert_implicit_mult(s: str) -> str:
+def _insert_implicit_mult(s: str, aggressive: bool = False) -> str:
     """
-    Insert '*' for implicit multiplication, while protecting true calls.
-    Uses a sentinel '⟬' to temporarily hide '(' from known calls so the
-    regex won't insert '*' between name and '('.
+    Insert '*' for implicit multiplication, while protecting real calls.
+    'aggressive=False' avoids splitting complex identifiers (e.g., E_R_m).
+    'aggressive=True' additionally splits glued identifiers like bp -> b*p.
     """
     protos = {
         "math.log(": "MATHLOG⟬",
@@ -355,7 +355,7 @@ def _insert_implicit_mult(s: str) -> str:
     for k, v in protos.items():
         s = s.replace(k, v)
 
-    # 1) A( -> A*( 
+    # 1) A( -> A*(
     s = re.sub(r'([0-9A-Za-z_)\]])\s*\(', r'\1*(', s)
     # 2) )( or )x -> )*x
     s = re.sub(r'\)\s*([0-9A-Za-z_])', r')*\1', s)
@@ -363,8 +363,11 @@ def _insert_implicit_mult(s: str) -> str:
     s = re.sub(r'(\d)\s*([A-Za-z_])', r'\1*\2', s)
     # 4) x y -> x*y
     s = re.sub(r'([A-Za-z_][A-Za-z_0-9]*)\s+([A-Za-z_])', r'\1*\2', s)
-    # 5) xy (adjacent identifiers, no space) -> x*y (but NOT x_*)
-    s = re.sub(r'([A-Za-z_][A-Za-z_0-9]*)(?=[A-Za-z])', r'\1*', s)
+
+    if aggressive:
+        # 5) xy (adjacent identifiers) -> x*y, but DON'T split if the left ends with '_'
+        #    e.g., 'bp' -> 'b* p'   but 'E_R_m' stays intact
+        s = re.sub(r'([A-Za-z_][A-Za-z0-9]*[A-Za-z0-9])(?=[A-Za-z])', r'\1*', s)
 
     for k, v in protos.items():
         s = s.replace(v, k)
@@ -373,7 +376,8 @@ def _insert_implicit_mult(s: str) -> str:
 def _strip_redundant_braces(s: str) -> str:
     return s
 
-def _preprocess_base(latex: str) -> str:
+def _preprocess_base(latex: str, aggressive: bool = False) -> str:
+    s = _insert_implicit_mult(s, aggressive=aggressive)
     s = _strip_math_delims(latex)
     s = _rhs_of_equals(s)
     s = _drop_trailing_constraints(s)        # NEW: drop ", q=1-p" style tails
@@ -458,16 +462,16 @@ def _find_first_sum(s: str) -> Optional[Tuple[int, int, str, str, str, str, int]
         body = s[hdr_end:j].strip(); end_after_body = j
     return hdr_start, hdr_end, var, lower_expr, upper_expr, body, end_after_body
 
-def _eval_one_sum(s: str, variables: Dict[str, float]) -> str:
+def _eval_one_sum(s: str, variables: Dict[str, float], aggressive: bool = False) -> str:
     occ = _find_first_sum(s)
     if not occ: return s
     hdr_start, hdr_end, var, lower_expr, upper_expr, body, end_after_body = occ
 
     env = _build_env(variables)
 
-    lower_py = _caret_to_pow(_preprocess_base(lower_expr))
-    upper_py = _caret_to_pow(_preprocess_base(upper_expr))
-    body_py  = _caret_to_pow(_preprocess_base(body))
+    lower_py = _caret_to_pow(_preprocess_base(lower_expr, aggressive=aggressive))
+    upper_py = _caret_to_pow(_preprocess_base(upper_expr, aggressive=aggressive))
+    body_py  = _caret_to_pow(_preprocess_base(body,        aggressive=aggressive))
 
     start_val = int(round(_safe_eval(lower_py, env)))
     end_val   = int(round(_safe_eval(upper_py, env)))
@@ -485,14 +489,14 @@ def _eval_one_sum(s: str, variables: Dict[str, float]) -> str:
     return f"{prefix}({total}){suffix}"
 
 
-def _expand_all_sums(s: str, variables: Dict[str, float]) -> str:
+def _expand_all_sums(s: str, variables: Dict[str, float], aggressive: bool = False) -> str:
     prev = None; cur = s; safety = 0
     while prev != cur:
         safety += 1
         if safety > SUM_NEST_LIMIT:
             raise ValueError("Too many nested summations")
         prev = cur
-        cur = _eval_one_sum(cur, variables)
+        cur = _eval_one_sum(cur, variables, aggressive=aggressive)
     return cur
 
 def _resolve_free_i_with_N(s: str, variables: Dict[str, float]) -> str:
@@ -503,11 +507,12 @@ def _resolve_free_i_with_N(s: str, variables: Dict[str, float]) -> str:
 # ----------------------------------------------------------------------
 # LaTeX → Python expression
 # ----------------------------------------------------------------------
-def latex_to_python_expr(latex: str, variables: Dict[str, float]) -> str:
-    s = _preprocess_base(latex)
-    s = _expand_all_sums(s, variables)
-    s = _resolve_free_i_with_N(s, variables)   # NEW
-    s = _caret_to_pow(s)                        # now handle ^ and ^{...}
+def latex_to_python_expr(latex: str, variables: Dict[str, float], aggressive: bool = False) -> str:
+    s = _preprocess_base(latex, aggressive=aggressive)
+    s = _expand_all_sums(s, variables, aggressive=aggressive)
+    s = _resolve_free_i_with_N(s, variables)
+    s = _caret_to_pow(s)
+    s = s.replace("{", "(").replace("}", ")")
     s = re.sub(r"\s+", "", s)
     return s
 
@@ -531,22 +536,37 @@ class Sol:
         self.tests = tests
 
     def _evaluate_one(self, name: str, ttype: str, formula: str, variables: Dict[str, float]) -> float:
+        # ---- PASS 1: safe (no glued-identifier split) ----
         try:
-            expr = latex_to_python_expr(formula, variables)
+            expr = latex_to_python_expr(formula, variables, aggressive=False)
         except Exception as e:
-            _log_failed_test(name, formula, variables, ttype, phase="transform",
-                             kind=type(e).__name__, msg=str(e))
-            return float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")
+            # If transform fails, try aggressive transform before giving up
+            try:
+                expr = latex_to_python_expr(formula, variables, aggressive=True)
+            except Exception as e2:
+                _log_failed_test(name, formula, variables, ttype, phase="transform",
+                                kind=type(e2).__name__, msg=str(e2))
+                return float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")
 
         env = _build_env(variables)
+        expr1, alias_map1 = _rename_keywords_in_expr(expr, variables)
+        env1 = _apply_alias_env(env, alias_map1)
         try:
-            val = _safe_eval(expr, env)
+            val = _safe_eval(expr1, env1)
             return float(f"{float(val):.{ROUND_DP}f}")
-        except Exception as e:
-            _log_failed_test(name, formula, variables, ttype, phase="eval",
-                             kind=type(e).__name__, msg=str(e))
-            return float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")
-
+        except Exception:
+            # ---- PASS 2: aggressive (split glued identifiers like 'bp' -> 'b*p') ----
+            try:
+                expr2 = latex_to_python_expr(formula, variables, aggressive=True)
+                expr2, alias_map2 = _rename_keywords_in_expr(expr2, variables)
+                env2 = _apply_alias_env(env, alias_map2)
+                val2 = _safe_eval(expr2, env2)
+                return float(f"{float(val2):.{ROUND_DP}f}")
+            except Exception as e2:
+                _log_failed_test(name, formula, variables, ttype, phase="eval",
+                                kind=type(e2).__name__, msg=str(e2))
+                return float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")
+            
     def solve(self) -> List[Dict[str, float]]:
         out: List[Dict[str, float]] = []
         for test in self.tests or []:

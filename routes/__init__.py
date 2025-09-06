@@ -3,3 +3,4 @@ app = Flask(__name__)
 import routes.square 
 import routes.agent
 import routes.trader
+import routes.trivia
