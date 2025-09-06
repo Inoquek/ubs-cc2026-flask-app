@@ -77,6 +77,14 @@ def _fix_accidental_variable_calls(expr: str, env: Dict[str, Any]) -> str:
         expr = re.sub(pattern, f'{name}*(', expr)
     return expr
 
+def _break_illegal_attributes(expr: str) -> str:
+    """
+    Turn accidental attribute-like tokens 'x.y' into 'x*y' unless it's 'math.y'.
+    This avoids ValueError from the AST checker while keeping math.<func> intact.
+    """
+    # Replace <name>.<ident> with <name>*<ident>, except when <name> == 'math'
+    return re.sub(r'\b(?!math\b)([A-Za-z0-9_]+)\.([A-Za-z_][A-Za-z0-9_]*)', r'\1*\2', expr)
+
 
 def _safe_eval(expr: str, env: Dict[str, Any]) -> float:
     """Safely evaluate arithmetic expression using a restricted AST."""
@@ -618,6 +626,10 @@ def _eval_one_sum(s: str, variables: Dict[str, float], aggressive: bool = False)
     upper_py = _caret_to_pow(_preprocess_base(upper_expr, aggressive=aggressive))
     body_py  = _caret_to_pow(_preprocess_base(body,        aggressive=aggressive))
 
+    lower_py = _break_illegal_attributes(lower_py)
+    upper_py = _break_illegal_attributes(upper_py)
+    body_py  = _break_illegal_attributes(body_py)
+    
     start_val = int(round(_safe_eval(lower_py, env)))
     end_val   = int(round(_safe_eval(upper_py, env)))
 
@@ -625,10 +637,13 @@ def _eval_one_sum(s: str, variables: Dict[str, float], aggressive: bool = False)
 
     total = 0.0
     for k in range(start_val, end_val + 1):
+        
         env_iter = dict(env); env_iter[var] = k
         body_k = patt.sub(rf"\1_{k}", body_py)
         body_k, alias_map = _rename_keywords_in_expr(body_k, variables)
         env_iter = _apply_alias_env(env_iter, alias_map)
+        
+        body_k = _break_illegal_attributes(body_k)
         total += float(_safe_eval(body_k, env_iter))
 
     prefix = s[:hdr_start]; suffix = s[end_after_body:]
