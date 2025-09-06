@@ -52,32 +52,6 @@ _ALLOWED_NODES = (
 _ALLOWED_BIN_OPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod)
 _ALLOWED_UNARY_OPS = (ast.UAdd, ast.USub)
 
-def _fix_accidental_variable_calls(expr: str, env: Dict[str, Any]) -> str:
-    """
-    Replace accidental 'var(' with 'var*(' when 'var' exists in env and is NOT callable.
-    This preserves real functions like max/min/math.log, since those are callable.
-    """
-    # Sort by descending length to avoid partial overlaps (e.g., sigma_10 before sigma_1)
-    names = sorted([k for k in env.keys() if isinstance(k, str)], key=len, reverse=True)
-
-    for name in names:
-        val = env.get(name)
-        # skip callables/modules and dunders
-        if callable(val): 
-            continue
-        if name.startswith("__"):
-            continue
-        # only patch plain identifiers (avoid 'math.log', which has a dot)
-        if "." in name:
-            continue
-
-        # Replace occurrences of \bname\s*( with name*(
-        # Use a negative lookbehind to avoid replacing attribute calls like math.log(
-        pattern = rf'(?<!\.)\b{re.escape(name)}\s*\('
-        expr = re.sub(pattern, f'{name}*(', expr)
-    return expr
-
-
 def _safe_eval(expr: str, env: Dict[str, Any]) -> float:
     """Safely evaluate arithmetic expression using a restricted AST."""
     def _check(node: ast.AST):
@@ -611,9 +585,6 @@ class Sol:
         env = _build_env(variables)
         expr1, alias_map1 = _rename_keywords_in_expr(expr, variables)
         env1 = _apply_alias_env(env, alias_map1)
-        
-        expr1 = _fix_accidental_variable_calls(expr1, env1)
-        
         try:
             val = _safe_eval(expr1, env1)
             return float(f"{float(val):.{ROUND_DP}f}")
@@ -625,9 +596,6 @@ class Sol:
                 expr2 = latex_to_python_expr(formula, variables, aggressive=True)
                 expr2, alias_map2 = _rename_keywords_in_expr(expr2, variables)
                 env2 = _apply_alias_env(env, alias_map2)
-                
-                expr2 = _fix_accidental_variable_calls(expr2, env2)
-                
                 val2 = _safe_eval(expr2, env2)
                 return float(f"{float(val2):.{ROUND_DP}f}")
             except Exception as e2:
@@ -653,7 +621,7 @@ class Sol:
 
 # ------------------------- Flask Route -------------------------
 @app.route('/trading-formula', methods=['POST'])
-def trader():
+def trader1():
     """
     POST /trading-formula
     Content-Type: application/json
