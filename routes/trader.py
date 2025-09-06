@@ -7,15 +7,19 @@ from typing import Dict, List, Any
 from flask import request, jsonify
 from routes import app
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ------------------------- Config -------------------------
-DEFAULT_RESULT = 0.0  # what we return for a single test that fails
-ROUND_DP = 4          # round to 4 decimals
+# ----------------------------------------------------------------------
+# Config
+# ----------------------------------------------------------------------
+DEFAULT_RESULT = 0.0   # number returned for a single test that fails
+ROUND_DP = 4           # round results to 4 decimals
+SUM_NEST_LIMIT = 50    # safety guard for nested \sum expansion
 
-
-# ------------------------- Safe evaluation -------------------------
-# Allowed node types
+# ----------------------------------------------------------------------
+# Safe evaluation (restricted AST)
+# ----------------------------------------------------------------------
 _ALLOWED_NODES = (
     ast.Expression,
     ast.BinOp,
@@ -24,41 +28,73 @@ _ALLOWED_NODES = (
     ast.Name, ast.Load,
     ast.Call, ast.Attribute,
     ast.Tuple, ast.List,
-    ast.Subscript, getattr(ast, "Index", ast.slice),
 )
 
-# Allowed ops
 _ALLOWED_BIN_OPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod)
 _ALLOWED_UNARY_OPS = (ast.UAdd, ast.USub)
 
-def _safe_eval(expr: str, env: Dict[str, Any]) -> float:
-    """
-    Safely evaluate a Python arithmetic expression using a restricted AST.
-    Allowed: +,-,*,/,**, unary +/-, max, min, math.* (log, exp, e), numbers & variables.
-    """
+def _short(s: str, n: int = 180) -> str:
+    s = s.replace("\n", " ")
+    return s if len(s) <= n else s[:n] + "…"
 
+def _ops_present(expr: str) -> List[str]:
+    ops = []
+    if r"\frac" in expr or ("((" in expr and ")/(" in expr):
+        ops.append("frac/div")
+    if "max(" in expr:
+        ops.append("max")
+    if "min(" in expr:
+        ops.append("min")
+    if r"\sum" in expr or "SUM" in expr:
+        ops.append("sum")
+    if "math.exp(" in expr:
+        ops.append("exp")
+    if "math.log(" in expr:
+        ops.append("log")
+    if "**" in expr:
+        ops.append("pow")
+    if "*" in expr:
+        ops.append("mul")
+    if "/" in expr:
+        ops.append("div")
+    if "+" in expr:
+        ops.append("add")
+    if re.search(r'[A-Za-z0-9_]\*\(', expr):
+        ops.append("implicit*")
+    return ops
+
+def _find_unbound_names(expr: str, env_keys: set) -> List[str]:
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except Exception:
+        return []
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            if node.id not in {"math", "max", "min"}:
+                names.add(node.id)
+    return sorted(list(names - set(env_keys)))
+
+def _safe_eval(expr: str, env: Dict[str, Any]) -> float:
+    """Safely evaluate arithmetic expression using a restricted AST."""
     def _check(node: ast.AST):
-        # Validate operators on parents; don't descend into op nodes themselves.
         if isinstance(node, ast.BinOp):
             if not isinstance(node.op, _ALLOWED_BIN_OPS):
                 raise ValueError(f"Disallowed operator: {type(node.op).__name__}")
             _check(node.left)
             _check(node.right)
             return
-
         if isinstance(node, ast.UnaryOp):
             if not isinstance(node.op, _ALLOWED_UNARY_OPS):
                 raise ValueError(f"Disallowed unary operator: {type(node.op).__name__}")
             _check(node.operand)
             return
-
         if isinstance(node, ast.Call):
             func = node.func
             if isinstance(func, ast.Name):
                 if func.id not in env:
                     raise ValueError(f"Call to unknown function: {func.id}")
             elif isinstance(func, ast.Attribute):
-                # Only allow math.xxx
                 if not (isinstance(func.value, ast.Name) and func.value.id == "math"):
                     raise ValueError("Only math.<func> attribute calls are allowed")
             else:
@@ -68,25 +104,44 @@ def _safe_eval(expr: str, env: Dict[str, Any]) -> float:
             for kw in node.keywords or []:
                 _check(kw.value)
             return
-
         if isinstance(node, ast.Attribute):
             if not (isinstance(node.value, ast.Name) and node.value.id == "math"):
                 raise ValueError("Only math.<attr> is allowed")
             return
-
         if isinstance(node, _ALLOWED_NODES):
             for child in ast.iter_child_nodes(node):
                 _check(child)
             return
-
         raise ValueError(f"Disallowed expression node: {type(node).__name__}")
 
-    tree = ast.parse(expr, mode="eval")
-    _check(tree)
-    return eval(compile(tree, "<expr>", "eval"), {"__builtins__": {}}, env)
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except Exception as e:
+        logger.warning("phase=ast_parse kind=%s msg=%s expr=%s",
+                       type(e).__name__, _short(str(e)), _short(expr))
+        raise
 
+    try:
+        _check(tree)
+    except Exception as e:
+        logger.warning("phase=ast_check kind=%s msg=%s expr=%s ops=%s",
+                       type(e).__name__, _short(str(e)), _short(expr), _ops_present(expr))
+        raise
 
-# ------------------------- LaTeX preprocessing -------------------------
+    missing = _find_unbound_names(expr, set(env.keys()))
+    if missing:
+        logger.warning("phase=pre_eval_missing_vars missing=%s expr=%s", missing, _short(expr))
+
+    try:
+        return eval(compile(tree, "<expr>", "eval"), {"__builtins__": {}}, env)
+    except Exception as e:
+        logger.warning("phase=eval kind=%s msg=%s expr=%s ops=%s",
+                       type(e).__name__, _short(str(e)), _short(expr), _ops_present(expr))
+        raise
+
+# ----------------------------------------------------------------------
+# LaTeX preprocessing
+# ----------------------------------------------------------------------
 _GREEK = {
     r"\alpha": "alpha", r"\beta": "beta", r"\gamma": "gamma", r"\delta": "delta",
     r"\epsilon": "epsilon", r"\zeta": "zeta", r"\eta": "eta", r"\theta": "theta",
@@ -126,16 +181,16 @@ def _replace_greek(s: str) -> str:
 def _normalize_indices(s: str) -> str:
     # E[R_m] -> E_R_m ; A[B] -> A_B
     s = re.sub(r"([A-Za-z]+)\[([^\]]+)\]", lambda m: f"{m.group(1)}_{m.group(2)}", s)
-    # X_{a_b} -> X_a_b ; remove braces around subscripts
+    # X_{a_b} -> X_a_b (remove braces)
     s = re.sub(r"_\{([^}]+)\}", lambda m: "_" + m.group(1), s)
-    # Remove spaces around underscores: Z_ alpha -> Z_alpha
+    # Collapse spaces around underscores
     s = re.sub(r"\s*_\s*", "_", s)
     return s
 
 def _normalize_basic_ops(s: str) -> str:
     # Multiplication
     s = s.replace(r"\cdot", "*").replace(r"\times", "*")
-    # Max/min
+    # Max/Min
     s = s.replace(r"\operatorname{Max}", "max").replace(r"\operatorname{Min}", "min")
     s = s.replace(r"\max", "max").replace(r"\min", "min")
     # Remove \left \right and spacing macros
@@ -143,7 +198,8 @@ def _normalize_basic_ops(s: str) -> str:
     s = s.replace(r"\,", "").replace(r"\;", "").replace(r"\:", "").replace(r"\ ", "")
     return s
 
-def _find_braced(s: str, i: int) -> (str, int):
+def _find_braced(s: str, i: int):
+    """Given s and index i at '{', return (content, end_index_of_closing_brace)."""
     assert s[i] == "{"
     depth = 0
     j = i
@@ -158,6 +214,7 @@ def _find_braced(s: str, i: int) -> (str, int):
     raise ValueError("Unbalanced braces in LaTeX")
 
 def _transform_frac(s: str) -> str:
+    """Replace all \frac{A}{B} with ((A)/(B)), handling nesting."""
     out = []
     i = 0
     while i < len(s):
@@ -180,12 +237,12 @@ def _transform_frac(s: str) -> str:
     return "".join(out)
 
 def _transform_power_e(s: str) -> str:
-    # e^{...} -> (e**(...)); then '^' -> '**'
+    """Handle e^{...} -> (e**(...)); then convert remaining '^' to '**'."""
     out = []
     i = 0
     while i < len(s):
         if s.startswith("e^{", i):
-            i += 2
+            i += 2  # skip 'e^'
             if i >= len(s) or s[i] != "{":
                 raise ValueError("Malformed e^{...}")
             inner, j = _find_braced(s, i)
@@ -194,11 +251,12 @@ def _transform_power_e(s: str) -> str:
         else:
             out.append(s[i])
             i += 1
-    s2 = "".join(out).replace("^", "**")
+    s2 = "".join(out)
+    s2 = s2.replace("^", "**")
     return s2
 
 def _normalize_funcs_to_python(s: str) -> str:
-    # \log(x) -> math.log(x), \exp(x) -> math.exp(x)
+    # \log(x) -> math.log(x) | \exp(x) -> math.exp(x)
     s = s.replace(r"\log", "log").replace(r"\exp", "exp")
     s = re.sub(r"(?<![A-Za-z0-9_])log\s*\(", "math.log(", s)
     s = re.sub(r"(?<![A-Za-z0-9_])exp\s*\(", "math.exp(", s)
@@ -207,6 +265,7 @@ def _normalize_funcs_to_python(s: str) -> str:
 def _insert_implicit_mult(s: str) -> str:
     """
     Insert '*' for implicit multiplication, while protecting real calls.
+    Examples covered: A(…), )( or )x, 2x, x y, (a+b)(c+d).
     """
     # Protect known function-call prefixes so we don't insert before '('
     protos = {
@@ -218,7 +277,7 @@ def _insert_implicit_mult(s: str) -> str:
     for k, v in protos.items():
         s = s.replace(k, v)
 
-    # A( -> A*( ;  )( or )x -> )*x ; 2x -> 2*x ; x y -> x*y
+    # A( -> A*( |  )( or )x -> )*x | 2x -> 2*x | x y -> x*y
     s = re.sub(r'([0-9A-Za-z_)\]])\s*\(', r'\1*(', s)
     s = re.sub(r'\)\s*([0-9A-Za-z_])', r')*\1', s)
     s = re.sub(r'(\d)\s*([A-Za-z_])', r'\1*\2', s)
@@ -245,8 +304,9 @@ def _preprocess_base(latex: str) -> str:
     s = _strip_redundant_braces(s)
     return s.strip()
 
-
-# ------------------------- Summation support -------------------------
+# ----------------------------------------------------------------------
+# Summation (\sum) support
+# ----------------------------------------------------------------------
 def _first_sum_occurrence(s: str):
     m = _SUM_PATTERN.search(s)
     if not m:
@@ -293,7 +353,6 @@ def _eval_one_sum(s: str, variables: Dict[str, float]) -> str:
         return s
     hdr_start, hdr_end, var, start_expr, end_expr, body, end_after_body = occ
 
-    # Safely evaluate bounds with current variables
     env = _build_env(variables)
     start_py = _preprocess_base(start_expr)
     end_py   = _preprocess_base(end_expr)
@@ -317,26 +376,46 @@ def _expand_all_sums(s: str, variables: Dict[str, float]) -> str:
     safety = 0
     while prev != cur:
         safety += 1
-        if safety > 50:
+        if safety > SUM_NEST_LIMIT:
+            logger.warning("phase=sum_expand kind=LimitExceeded expr=%s", _short(cur))
             break  # soft-fail: stop expanding rather than raising
         prev = cur
         try:
             cur = _eval_one_sum(cur, variables)
         except Exception as e:
-            logger.debug("sum expansion failed: %s", e)
+            logger.debug("phase=sum_expand kind=%s msg=%s expr=%s",
+                         type(e).__name__, _short(str(e)), _short(cur))
             break  # soft-fail
     return cur
 
-
-# ------------------------- LaTeX → Python expr -------------------------
+# ----------------------------------------------------------------------
+# LaTeX → Python expression
+# ----------------------------------------------------------------------
 def latex_to_python_expr(latex: str, variables: Dict[str, float]) -> str:
-    s = _preprocess_base(latex)
-    s = _expand_all_sums(s, variables)
+    try:
+        s = _preprocess_base(latex)
+        logger.debug("phase=preprocess ok expr=%s", _short(s))
+    except Exception as e:
+        logger.warning("phase=preprocess kind=%s msg=%s latex=%s",
+                       type(e).__name__, _short(str(e)), _short(latex))
+        raise
+
+    try:
+        s_exp = _expand_all_sums(s, variables)
+        if s_exp != s:
+            logger.debug("phase=sum_expand changed=1 expr=%s", _short(s_exp))
+        s = s_exp
+    except Exception as e:
+        logger.warning("phase=sum_expand kind=%s msg=%s expr=%s",
+                       type(e).__name__, _short(str(e)), _short(s))
+        raise
+
     s = re.sub(r"\s+", "", s)
     return s
 
-
-# ------------------------- Environment -------------------------
+# ----------------------------------------------------------------------
+# Environment
+# ----------------------------------------------------------------------
 def _build_env(variables: Dict[str, float]) -> Dict[str, Any]:
     env = {"math": math, "max": max, "min": min}
     env.update({k: float(v) for k, v in variables.items()})
@@ -344,13 +423,11 @@ def _build_env(variables: Dict[str, float]) -> Dict[str, Any]:
         env["e"] = math.e
     return env
 
-
-# ------------------------- Core Solver (SOFT FAIL PER TEST) -------------------------
+# ----------------------------------------------------------------------
+# Core solver (soft-fail per test)
+# ----------------------------------------------------------------------
 class Sol:
-    r"""
-    Evaluate an array of LaTeX formulas with variable maps (no third-party libs).
-    Per-test soft failure: on any error, returns DEFAULT_RESULT rounded to 4dp.
-    """
+    r"""Evaluate LaTeX formulas with variable maps (no third-party libs)."""
 
     def __init__(self, tests: List[Dict[str, Any]]):
         self.tests = tests
@@ -358,14 +435,23 @@ class Sol:
     def _evaluate_one(self, name: str, formula: str, variables: Dict[str, float]) -> float:
         try:
             expr = latex_to_python_expr(formula, variables)
-            env = _build_env(variables)
-            val = _safe_eval(expr, env)
-            return float(f"{float(val):.{ROUND_DP}f}")
         except Exception as e:
-            logger.debug("Test '%s' failed (%s). Returning default.", name, e, exc_info=True)
+            logger.warning("test=%s result=default phase=transform kind=%s ops_hint=%s latex=%s",
+                           name, type(e).__name__, _ops_present(formula), _short(formula))
             return float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")
 
-    def solve(self) -> List[Dict[str, float]]:  # NEVER raises
+        env = _build_env(variables)
+        try:
+            val = _safe_eval(expr, env)
+            out = float(f"{float(val):.{ROUND_DP}f}")
+            logger.debug("test=%s result=ok value=%s expr=%s", name, out, _short(expr))
+            return out
+        except Exception as e:
+            logger.warning("test=%s result=default phase=eval kind=%s msg=%s expr=%s ops=%s",
+                           name, type(e).__name__, _short(str(e)), _short(expr), _ops_present(expr))
+            return float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")
+
+    def solve(self) -> List[Dict[str, float]]:
         out: List[Dict[str, float]] = []
         for test in self.tests or []:
             name = test.get("name", "")
@@ -374,12 +460,10 @@ class Sol:
             variables = test.get("variables", {})
             if not isinstance(variables, dict):
                 variables = {}
-
             if ttype != "compute":
                 logger.debug("Unsupported type '%s' in test '%s' — returning default.", ttype, name)
                 out.append({"result": float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")})
                 continue
-
             out.append({"result": self._evaluate_one(name, formula, variables)})
         return out
 
