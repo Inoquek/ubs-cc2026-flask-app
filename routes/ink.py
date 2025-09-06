@@ -4,8 +4,9 @@ from collections import defaultdict
 from flask import request, jsonify
 from routes import app
 import json
-import numpy as np
 from decimal import Decimal
+import numpy as np
+from pprint import pformat
 logger = logging.getLogger(__name__)
 
 
@@ -258,6 +259,15 @@ def calc2(data):
     gain = (best_prod - 1.0) * 100.0
     return {"path": path_names, "gain": float(gain)}
     
+def to_jsonable(x):
+    if isinstance(x, dict):
+        return {k: to_jsonable(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [to_jsonable(v) for v in x]
+    if isinstance(x, Decimal):
+        return float(x)
+    return x
+
 @app.route("/The-Ink-Archive", methods=["POST"])
 def ink():
     """
@@ -270,14 +280,14 @@ def ink():
         {"path": [...], "gain": ...}
       ]
     """
-    raw = request.get_data(as_text=True)
-    try:
-        data = json.loads(raw, parse_float=Decimal)
-    except Exception as e:
-        logger.exception("Failed to parse JSON as Decimal: %s", e)
-        return jsonify({"error": "invalid json"}), 400
     
-    logger.info("Received testcases: %s", json.dumps(data, indent=2))
+    raw = request.get_data(as_text=True)
+    data = json.loads(raw, parse_float=Decimal)      # if you chose Decimal parsing
+    data = to_jsonable(data)                         # normalize to floats for logging & calc
+    logger.info("Received testcases:\n%s", pformat(data))
+    logger.info("Received testcases: %s",
+            json.dumps(data, indent=2,
+                       default=lambda o: float(o) if isinstance(o, Decimal) else str(o)))
     
     # logger.info("data sent for evaluation %s", data)
 
