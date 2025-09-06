@@ -11,22 +11,19 @@ logger = logging.getLogger(__name__)
 def solve_case(case):
     intel = case["intel"]
     reserve = case["reserve"]
-    fronts = case["fronts"]  # kept for parity; not needed by DP logic itself
+    fronts = case["fronts"]      # kept for parity; not used by DP logic
     stamina_max = case["stamina"]
 
     n = len(intel)
-
-    # Pre-extract fronts & costs for speed/clarity
     F = [f for f, _ in intel]
     C = [c for _, c in intel]
 
     @lru_cache(maxsize=None)
     def dp(i: int, mp: int, stamina: int, chain: int) -> int:
         """
-        Returns the minimal remaining time (in minutes) from position i with the given resources.
-        chain = 1 means: the previous action was an attack on the same front as intel[i].front,
-                         so an immediate attack now would be an 'extend' costing 0.
-               = 0 means: no extend available (either previous was cooldown or different front).
+        Minimal remaining time (minutes) from index i with (mp, stamina).
+        chain == 1 : previous action was an attack and same front as F[i] -> extend next attack (0 min)
+        chain == 0 : no extend available (e.g., after cooldown or different front)
         """
         if i == n:
             # Mandatory final cooldown so Klein is ready to reinforce
@@ -35,19 +32,18 @@ def solve_case(case):
         front_i = F[i]
         cost_i = C[i]
 
-        best = float('inf')
+        best = float("inf")
 
-        # Option 1: Cooldown first (always allowed)
+        # --- Option 1: cooldown (only if it changes state to avoid self-recursion)
         if not (mp == reserve and stamina == stamina_max and chain == 0):
             best = min(best, COOLDOWN_MINUTES + dp(i, reserve, stamina_max, 0))
 
-        # Option 2: Attack now (only if resources allow)
+        # --- Option 2: attack now (if resources allow)
         if cost_i <= mp and stamina > 0:
-            # time to attack: 0 if extend chain, else 10
+            # Attack cost: 0 if extend allowed, else 10
             attack_cost = 0 if chain == 1 else ATTACK_MINUTES
 
-            # After attacking i, we move to i+1. The *next* state's chain is 1
-            # only if the next front equals current front.
+            # Next state's chain is 1 only if the *next* front equals current front
             if i + 1 < n and F[i + 1] == front_i:
                 next_chain = 1
             else:
@@ -55,12 +51,11 @@ def solve_case(case):
 
             best = min(
                 best,
-                attack_cost + dp(i + 1, mp - cost_i, stamina - 1, next_chain)
+                attack_cost + dp(i + 1, mp - cost_i, stamina - 1, next_chain),
             )
 
         return best
 
-    # Start at i=0 with full resources and no active chain.
     total_time = dp(0, reserve, stamina_max, 0)
     return {"time": total_time}
 
@@ -79,5 +74,3 @@ def gambit():
         return jsonify({"error": str(e)}), 400
 
     return jsonify(result), 200
-if not (mp == reserve and stamina == stamina_max and chain == 0):
-    best = min(best, COOLDOWN_MINUTES + dp(i, reserve, stamina_max, 0))
