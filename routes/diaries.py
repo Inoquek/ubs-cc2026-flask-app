@@ -4,7 +4,7 @@ import logging
 from routes import app
 from flask import jsonify, request
 logger = logging.getLogger(__name__)
-
+# test 123
 class Sol:
     def __init__(self, tasks, edges, s0):
         self.tasks = tasks # list of dicts
