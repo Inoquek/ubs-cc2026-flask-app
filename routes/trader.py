@@ -4,6 +4,7 @@ import re
 import ast
 import json
 from typing import Dict, List, Any, Tuple, Optional
+import keyword 
 
 from flask import request, jsonify
 from routes import app
@@ -115,6 +116,28 @@ def _drop_trailing_constraints(s: str) -> str:
         elif ch == "," and depth == 0:
             return s[:idx].strip()
     return s
+
+def _rename_keywords_in_expr(expr: str, variables: Dict[str, Any]) -> tuple[str, Dict[str, str]]:
+    """Rename Python keyword variable names in expr to safe aliases (name_)."""
+    alias_map: Dict[str, str] = {}
+    for k in variables.keys():
+        if keyword.iskeyword(k):
+            alias_map[k] = k + "_"
+    # Also cover Greek-mapped names that might collide (e.g., lambda)
+    for k in list(alias_map.keys()):
+        pass  # (already covered via keyword.iskeyword)
+
+    for old, new in alias_map.items():
+        expr = re.sub(rf'\b{re.escape(old)}\b', new, expr)
+    return expr, alias_map
+
+def _apply_alias_env(env: Dict[str, Any], alias_map: Dict[str, str]) -> Dict[str, Any]:
+    """Copy env and add aliases for renamed variables."""
+    env2 = dict(env)
+    for old, new in alias_map.items():
+        if old in env2:
+            env2[new] = env2.pop(old)
+    return env2
 
 def _resolve_t_subscripts(s: str, default_t: int = 1) -> str:
     """Turn _{t-k} -> _<default_t-k>, and _{t} -> _<default_t>.  (Before we strip braces.)"""
@@ -330,15 +353,22 @@ def _insert_implicit_mult(s: str) -> str:
         "max(": "MAXF⟬",
         "min(": "MINF⟬",
     }
-    for k, v in protos.items(): s = s.replace(k, v)
+    for k, v in protos.items():
+        s = s.replace(k, v)
 
-    # A( -> A*( |  )( or )x -> )*x | 2x -> 2*x | x y -> x*y | (a+b)(c+d) -> (a+b)*(c+d)
+    # 1) A( -> A*( 
     s = re.sub(r'([0-9A-Za-z_)\]])\s*\(', r'\1*(', s)
+    # 2) )( or )x -> )*x
     s = re.sub(r'\)\s*([0-9A-Za-z_])', r')*\1', s)
+    # 3) 2x -> 2*x
     s = re.sub(r'(\d)\s*([A-Za-z_])', r'\1*\2', s)
+    # 4) x y -> x*y
     s = re.sub(r'([A-Za-z_][A-Za-z_0-9]*)\s+([A-Za-z_])', r'\1*\2', s)
+    # 5) xy (adjacent identifiers, no space) -> x*y (but NOT x_*)
+    s = re.sub(r'([A-Za-z_][A-Za-z_0-9]*)(?=[A-Za-z])', r'\1*', s)
 
-    for k, v in protos.items(): s = s.replace(v, k)
+    for k, v in protos.items():
+        s = s.replace(v, k)
     return s
 
 def _strip_redundant_braces(s: str) -> str:
@@ -450,6 +480,9 @@ def _eval_one_sum(s: str, variables: Dict[str, float]) -> str:
     for k in range(start_val, end_val + 1):
         env_iter = dict(env); env_iter[var] = k
         body_k = patt.sub(rf"\1_{k}", body_py)
+        
+        body_k, alias_map = _rename_keywords_in_expr(body_k, variables)
+        env_iter = _apply_alias_env(env_iter, alias_map)
         total += float(_safe_eval(body_k, env_iter))
 
     prefix = s[:hdr_start]; suffix = s[end_after_body:]
@@ -479,6 +512,7 @@ def latex_to_python_expr(latex: str, variables: Dict[str, float]) -> str:
     s = _expand_all_sums(s, variables)
     s = _resolve_free_i_with_N(s, variables)   # NEW
     s = _caret_to_pow(s)                        # now handle ^ and ^{...}
+    s = s.replace("{", "(").replace("}", ")")
     s = re.sub(r"\s+", "", s)
     return s
 
@@ -510,6 +544,9 @@ class Sol:
             return float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")
 
         env = _build_env(variables)
+        expr, alias_map = _rename_keywords_in_expr(expr, variables)
+        env = _apply_alias_env(env, alias_map)
+        
         try:
             val = _safe_eval(expr, env)
             return float(f"{float(val):.{ROUND_DP}f}")
