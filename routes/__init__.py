@@ -4,5 +4,5 @@ import routes.square
 import routes.agent
 import routes.trader
 import routes.trivia
-import routes.gambit
+import routes.gambit1
 import routes.duolingo
