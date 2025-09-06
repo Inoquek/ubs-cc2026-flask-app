@@ -6,20 +6,7 @@ from routes import app
 ATTACK_MINUTES = 10
 COOLDOWN_MINUTES = 10
 
-logging.basicConfig(level=logging.INFO)
-FAIL_LOGGER = logging.getLogger(__name__)
-FAIL_LOGGER.setLevel(logging.INFO)   # <= now logs at INFO 
-
-def _log_failed_test(case, got, expected):
-    FAIL_LOGGER.info({
-        "event": "test_failed",
-        "intel": case.get("intel"),
-        "reserve": case.get("reserve"),
-        "fronts": case.get("fronts"),
-        "stamina": case.get("stamina"),
-        "expected": expected,
-        "got": got,
-    })
+logger = logging.getLogger(__name__)
 
 def solve_case(case):
     intel = case["intel"]
@@ -75,7 +62,7 @@ def solve_case(case):
 
     # Optional: compare with provided expected, log mismatch
     if "expected" in case and case["expected"] != time:
-        _log_failed_test(case, got=time, expected=case["expected"])
+        logger.info(case, got=time, expected=case["expected"])
 
     return {"time": time}
 
@@ -83,11 +70,12 @@ def solve_case(case):
 def gambit():
     if not request.is_json:
         return jsonify({"error": "Expected application/json body"}), 400
-
     payload = request.get_json()
     if not isinstance(payload, list):
         return jsonify({"error": "Expected a JSON array of cases"}), 400
-
+    
+    for case in payload:
+        logger.info(case)
     try:
         result = [solve_case(case) for case in payload]
     except (KeyError, TypeError, ValueError) as e:
