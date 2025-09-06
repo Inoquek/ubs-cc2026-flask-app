@@ -299,6 +299,20 @@ def _mymaps_csv(points: List[Tuple[float,float]]) -> str:
         lines.append(f"{lat},{lon}")
     return "\n".join(lines)
 
+def _as_str(v) -> str:
+    if v is None:
+        return ""
+    # ints/floats/bools → string
+    if isinstance(v, (int, float, bool)):
+        return str(v)
+    # strings pass through
+    if isinstance(v, str):
+        return v
+    # anything else → compact JSON string (or str())
+    try:
+        return json.dumps(v, separators=(",", ":"))
+    except Exception:
+        return str(v)
 # --------------------------
 # Challenge 2: main
 # --------------------------
@@ -329,6 +343,7 @@ def challenge2_calc(data):
 
     # Return both scalar answer and extras
     return digit, extras
+
 def challenge3_calc(data) :
     return "a"
 def challenge4_calc(result1, result2, result3) :
@@ -343,13 +358,25 @@ def operation():
     challenge1_data = data.get("challenge_one")
     challenge2_data = data.get("challenge_two")
     challenge3_data = data.get("challenge_three")
-
+    
     result1 = challenge1_calc(challenge1_data)
-    result2, c2_extras = challenge2_calc(challenge2_data) 
+     # If your C2 returns (digit, extras), ignore extras in response
+    c2_val = None
+    try:
+        c2_val, _c2_extras = challenge2_calc(challenge2_data)
+    except TypeError:
+        # if your current challenge2_calc returns scalar, just use it
+        c2_val = challenge2_calc(challenge2_data)
+
     result3 = challenge3_calc(challenge3_data)
-
-    result4 = challenge4_calc(result1, result2, result3)
-
-    result = {"challenge_one": result1, "challenge_two": result2, "challenge_three": result3, "challenge_four": result4}
+    result4 = challenge4_calc(result1, c2_val, result3)
+    
+    # IMPORTANT: the grader wants strings for these four keys
+    result = {
+        "challenge_one":   _as_str(result1),
+        "challenge_two":   _as_str(c2_val),
+        "challenge_three": _as_str(result3),
+        "challenge_four":  _as_str(result4),
+    }
     logging.info("My result :{}".format(result))
     return json.dumps(result)
