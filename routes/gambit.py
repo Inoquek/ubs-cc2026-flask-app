@@ -43,10 +43,12 @@ def gambit():
     if not request.is_json:
         return jsonify({"error": "Expected application/json body"}), 400
     payload = request.get_json()
+    
     # assert len(payload) == 10
-    for case in [2, 5, 10]:
-        logger.info(f"Case {case}:")
-        logger.info(payload[case-1])
+    
+    # for case in [2, 5, 10]:
+    #     logger.info(f"Case {case}:")
+    #     logger.info(payload[case-1])
 
     if not isinstance(payload, list):
         return jsonify({"error": "Expected a JSON array of cases"}), 400
