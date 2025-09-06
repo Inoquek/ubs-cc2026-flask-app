@@ -19,23 +19,26 @@ def solve_case(case):
     stamina = stamina_max
     prev_action_attack = False
     last_front = None
+    last_mp = None
     
     for idx, (front, mp_cost) in enumerate(intel, start=1):
         if mp_cost > mp or stamina == 0:
             time += 10
             mp = reserve
             stamina = stamina_max
-            prev_action_attack = False
+            prev_action_attack =False
             last_front = None
+            last_mp = None
         
         mp -= mp_cost
         stamina -= 1
-        if not(prev_action_attack and last_front == front):
+        if not(prev_action_attack and last_front == front and last_mp == mp_cost):
             time += 10
         
 
         prev_action_attack = True
         last_front = front
+        last_mp = mp_cost
         
     if not(mp == reserve and stamina == stamina_max):
         time += 10 # mandatory cooldown
