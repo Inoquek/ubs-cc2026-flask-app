@@ -430,16 +430,17 @@ def duolingo():
             return jsonify({"sortedList": [str(v) for v in values]})
 
         else:  # part == "TWO"
-            annotated: List[Tuple[int, int, int, str]] = []  # (value, tie_rank, idx, original)
-            for idx, s in enumerate(unsorted_list):
-                lang = detect_language(s)
-                val = PARSERS[lang](s.strip())
-                tie_rank = TIE_ORDER[lang]
-                annotated.append((val, tie_rank, idx, s))
+            # annotated: List[Tuple[int, int, int, str]] = []  # (value, tie_rank, idx, original)
+            # for idx, s in enumerate(unsorted_list):
+            #     lang = detect_language(s)
+            #     val = PARSERS[lang](s.strip())
+            #     tie_rank = TIE_ORDER[lang]
+            #     annotated.append((val, tie_rank, idx, s))
 
-            # Sort by (numeric value, tie order). For same value & same lang, preserve input order (idx).
-            annotated.sort(key=lambda t: (t[0], t[1], t[2]))
-            return jsonify({"sortedList": [t[3] for t in annotated]})
+            # # Sort by (numeric value, tie order). For same value & same lang, preserve input order (idx).
+            # annotated.sort(key=lambda t: (t[0], t[1], t[2]))
+            # return jsonify({"sortedList": [t[3] for t in annotated]})
+            return jsonify({"sortedList": []})
 
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
