@@ -7,8 +7,8 @@ from routes import app
 # e.g. "1,3,2,2,4,4,3,1,2"
 
 # hz naschest 6,7,
-# definitely correct 3,1,2,2,3, ... , 4 , 5, 4, 
-_RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,4,4,5,4")
+# definitely correct 3,1,2,2,3, ... , 4 , 5, 4,3,3, , ,  
+_RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,4,4,5,4,3,-1, -1, -1, -1, 2, 1, 1,2, -1, 1, -1,-1,-1,-1,-1")
 # _RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,3,4,5,4,  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1")  # default placeholder
 #  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
 #  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2
