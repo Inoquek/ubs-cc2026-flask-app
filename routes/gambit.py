@@ -41,9 +41,34 @@ def solve_case(case):
 
     time += 10 # mandatory cooldown
 
-    logger.info({ "expected": case["expected"], "got": time,
-                    "reserve": reserve, "fronts": fronts, "stamina": stamina_max})
+    expected = case.get("expected")   # <-- safe lookup
 
+    if expected is not None:
+        # compare
+        if expected != time:
+            logger.info({
+                "event": "test_failed",
+                "intel": case.get("intel"),
+                "reserve": case.get("reserve"),
+                "fronts": case.get("fronts"),
+                "stamina": case.get("stamina"),
+                "expected": expected,
+                "got": time,
+            })
+    # if you emit a summary log, also guard it:
+    summary = {
+        "event": "case_summary",
+        "intel_len": len(intel),
+        "reserve": reserve,
+        "fronts": fronts,
+        "stamina": stamina_max,
+        "got": time,
+    }
+    if expected is not None:
+        summary["expected"] = expected
+        summary["mismatch"] = (expected != time)
+    logger.info(summary)
+        
     return {"time": time}
 
 # TEST_CASE = 0

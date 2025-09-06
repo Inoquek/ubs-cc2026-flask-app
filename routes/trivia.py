@@ -8,12 +8,10 @@ from routes import app
 
 # hz naschest 6,7,
 # definitely correct 3,1,2,2,3, ... , 4 , 5, 4,3,3, , ,  
-_RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,4,4,5,4,3,-1, -1, -1, -1, 2, 1, 1,2, -1, 1, -1,2,-1,-1,2")
-# new changes 
+_RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,4,4,5,4,3,-1, -1, -1, -1, 2, 1, 1,2, -1, 1, -1,2,-1,5,2")
 
-# Q.22 - 2
-# Q.25 - 2 
-# Q.24 - 
+# new changes (not confident in them)
+# Q.24 - 5
 
 
 # -1 if dk the answer yet
