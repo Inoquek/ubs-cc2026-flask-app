@@ -320,6 +320,8 @@ def _insert_implicit_mult(s: str, aggressive: bool = False) -> str:
     # 1) number immediately followed by identifier: 2x -> 2*x
     s = re.sub(r'(\d)\s*([A-Za-z_])', r'\1*\2', s)
 
+    s = re.sub(r'(\d)\s*\(', r'\1*(', s)
+
     # 2) identifier or ) or ] followed by '(' : A( -> A*(
     s = re.sub(r'([0-9A-Za-z_)\]])\s*\(', r'\1*(', s)
 
