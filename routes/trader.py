@@ -9,37 +9,78 @@ from routes import app
 
 logger = logging.getLogger(__name__)
 
-# ------------------------- Utilities: safe evaluation -------------------------
-
-_ALLOWED_BIN_OPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod)
-_ALLOWED_UNARY_OPS = (ast.UAdd, ast.USub)
 _ALLOWED_NODES = (
-    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Num, ast.Constant,
-    ast.Name, ast.Load, ast.Call, ast.Attribute, ast.Tuple, ast.List, ast.Subscript,
-    ast.Index, ast.Pow
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Num, ast.Constant,
+    ast.Name, ast.Load,
+    ast.Call, ast.Attribute,
+    ast.Tuple, ast.List,
+    ast.Subscript, getattr(ast, "Index", ast.slice),  # Py3.12 compat
 )
 
-def _safe_eval(expr: str, env: Dict[str, Any]) -> float:
+# Explicitly allow these operators
+_ALLOWED_BIN_OPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod)
+_ALLOWED_UNARY_OPS = (ast.UAdd, ast.USub)
+
+def _safe_eval(expr: str, env: dict) -> float:
     """
     Safely evaluate a Python arithmetic expression using a restricted AST.
-    Allowed: +,-,*,/,**, unary +/-, max, min, math.* (log, exp, e, etc.), numbers & variables.
+    Allowed: +,-,*,/,**, unary +/-, max, min, math.* (log, exp, e), numbers & variables.
     """
+
     def _check(node: ast.AST):
-        if not isinstance(node, _ALLOWED_NODES):
-            raise ValueError(f"Disallowed expression node: {type(node).__name__}")
-        for child in ast.iter_child_nodes(node):
-            if isinstance(child, ast.BinOp) and not isinstance(child.op, _ALLOWED_BIN_OPS):
-                raise ValueError(f"Disallowed operator: {type(child.op).__name__}")
-            if isinstance(child, ast.UnaryOp) and not isinstance(child.op, _ALLOWED_UNARY_OPS):
-                raise ValueError(f"Disallowed unary operator: {type(child.op).__name__}")
-            _check(child)
+        # BinOp: validate operator, then recurse into left/right
+        if isinstance(node, ast.BinOp):
+            if not isinstance(node.op, _ALLOWED_BIN_OPS):
+                raise ValueError(f"Disallowed operator: {type(node.op).__name__}")
+            _check(node.left)
+            _check(node.right)
+            return
+
+        # UnaryOp: validate operator, then recurse
+        if isinstance(node, ast.UnaryOp):
+            if not isinstance(node.op, _ALLOWED_UNARY_OPS):
+                raise ValueError(f"Disallowed unary operator: {type(node.op).__name__}")
+            _check(node.operand)
+            return
+
+        # Function calls: allow names in env (e.g., max/min) or math.<fn>
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                if func.id not in env:
+                    raise ValueError(f"Call to unknown function: {func.id}")
+            elif isinstance(func, ast.Attribute):
+                # allow math.xxx where 'math' is provided in env
+                if not (isinstance(func.value, ast.Name) and func.value.id == "math"):
+                    raise ValueError("Only math.<func> attribute calls are allowed")
+            else:
+                raise ValueError("Unsupported callable")
+            for a in node.args:
+                _check(a)
+            for kw in node.keywords or []:
+                _check(kw.value)
+            return
+
+        # Attribute: only allow math.xxx
+        if isinstance(node, ast.Attribute):
+            if not (isinstance(node.value, ast.Name) and node.value.id == "math"):
+                raise ValueError("Only math.<attr> is allowed")
+            return
+
+        # Names, constants, tuples/lists, subscripts are fine — recurse into their children
+        if isinstance(node, _ALLOWED_NODES):
+            for child in ast.iter_child_nodes(node):
+                _check(child)
+            return
+
+        raise ValueError(f"Disallowed expression node: {type(node).__name__}")
 
     tree = ast.parse(expr, mode="eval")
     _check(tree)
-    # No builtins; only our whitelist
     return eval(compile(tree, "<expr>", "eval"), {"__builtins__": {}}, env)
-
-
 # ------------------------- LaTeX preprocessing helpers -------------------------
 
 _GREEK = {
