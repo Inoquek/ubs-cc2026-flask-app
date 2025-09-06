@@ -5,6 +5,9 @@ from typing import List, Tuple, Dict, Callable
 from flask import request, jsonify
 from routes import app
 
+from collections import defaultdict
+
+        
 # ---------------------------
 # Minimal logger: only for targeted debug lines
 # ---------------------------
@@ -16,6 +19,43 @@ if not logger.handlers:
     _h.setFormatter(logging.Formatter('%(message)s'))
     logger.addHandler(_h)
 
+
+def _log_only_when_wrong(part: str, challenge, unsorted_list, annotated):
+    """
+    annotated = list of tuples: (value, tie_rank, idx, original)
+    Logs nothing if everything looks correct.
+    Logs a single compact ERROR line if any check fails.
+    """
+    issues = []
+
+    # A) Numeric order must be non-decreasing
+    for i in range(1, len(annotated)):
+        v_prev, _, _, s_prev = annotated[i-1]
+        v_curr, _, _, s_curr = annotated[i]
+        if v_curr < v_prev:
+            issues.append(f"ORDER i={i} prev='{s_prev}'({v_prev}) > curr='{s_curr}'({v_curr})")
+            break  # one is enough to flag
+
+    # B) Within equal numeric values, tie ranks must follow your policy order
+    if not issues:
+        by_value = defaultdict(list)  # value -> [(tie, idx, s), ...] in final order
+        for (v, tie, idx, s) in annotated:
+            by_value[v].append((tie, idx, s))
+        for v, group in by_value.items():
+            expected = sorted(group, key=lambda x: (x[0], x[1]))  # (tie, idx)
+            if group != expected:
+                got = [s for (_, _, s) in group]
+                exp = [s for (_, _, s) in expected]
+                issues.append(f"TIE value={v} got={got} expected={exp}")
+                break
+
+    if issues:
+        # Keep log tiny: first 5 inputs & first issue only
+        logger.error(
+            "WRONG part=%s challenge=%s n=%d sample_in=%s issue=%s",
+            part, str(challenge), len(unsorted_list), unsorted_list[:5], issues[0]
+        )
+        
 # ---------------------------
 # Utilities: Roman numerals
 # ---------------------------
@@ -314,7 +354,7 @@ def duolingo():
             annotated.sort(key=lambda t: (t[0], t[1], t[2]))
             sorted_list = [t[3] for t in annotated]
             # log the final sorted list
-            logger.info(f"Sorted output = {sorted_list}")
+            _log_only_when_wrong(part, payload.get("challenge"), unsorted_list, annotated)
 
             return jsonify({"sortedList": sorted_list})
 
