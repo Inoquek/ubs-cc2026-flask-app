@@ -71,7 +71,7 @@ class Sol:
 
 
 @app.route('/ticketing-agent', methods=['POST'])
-def evaluate():
+def agent():
     data = request.get_json(silent=True) or {}
     # logger.info("data sent for evaluation %s", data)
 
