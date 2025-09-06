@@ -152,24 +152,26 @@ logger = logging.getLogger(__name__)
 
 def calc1(data):
     """
-    Part I ("The Whispering Loop"): return the best profitable triangle
-    (i -> j -> k -> i). If none exists, return empty/0 gain.
+    Part I: find the best profitable triangle (i->j->k->i),
+    then rotate so that the cycle ENDS with the largest individual edge.
+    This makes the path deterministic and matches the sample:
+      Kelp Silk -> Amberback Shells -> Ventspice -> Kelp Silk
     """
     ratios = data.get("ratios") or []
     goods = data.get("goods") or []
     n = len(goods)
 
-    # Dense rate lookup (0.0 means no edge)
+    # Dense rate lookup
     rate = [[0.0] * n for _ in range(n)]
     for u, v, r in ratios:
-        ui = int(u); vi = int(v)
+        ui, vi = int(u), int(v)
         if 0 <= ui < n and 0 <= vi < n:
             rate[ui][vi] = float(r)
 
     best_prod = 1.0
-    best_triangle = None  # (i, j, k) means i->j->k->i
+    best = None  # (i, j, k)
 
-    # Enumerate all distinct triples i, j, k
+    # Enumerate triangles i->j->k->i
     for i in range(n):
         for j in range(n):
             if j == i or rate[i][j] <= 0.0:
@@ -177,20 +179,39 @@ def calc1(data):
             for k in range(n):
                 if k == i or k == j:
                     continue
-                if rate[j][k] <= 0.0 or rate[k][i] <= 0.0:
+                rij, rjk, rki = rate[i][j], rate[j][k], rate[k][i]
+                if rjk <= 0.0 or rki <= 0.0:
                     continue
-                prod = rate[i][j] * rate[j][k] * rate[k][i]
+                prod = rij * rjk * rki
                 if prod > best_prod:
                     best_prod = prod
-                    best_triangle = (i, j, k)
+                    best = (i, j, k)
 
-    if not best_triangle or best_prod <= 1.0:
+    if not best or best_prod <= 1.0:
         return {"path": [], "gain": 0.0}
 
-    i, j, k = best_triangle
-    path = [goods[i], goods[j], goods[k], goods[i]]
+    i, j, k = best
+    # Find the largest single edge in this triangle
+    edges = [  # (from, to, rate)
+        (i, j, rate[i][j]),
+        (j, k, rate[j][k]),
+        (k, i, rate[k][i]),
+    ]
+    largest = max(edges, key=lambda e: e[2])
+    # Rotate so the cycle ENDS with the largest edge (start at its destination)
+    start = largest[1]  # destination node of the largest edge
+    # Determine the other two nodes in order
+    if start == i:
+        ordered = [i, j, k, i]
+    elif start == j:
+        ordered = [j, k, i, j]
+    else:  # start == k
+        ordered = [k, i, j, k]
+
+    path = [goods[x] for x in ordered]
     gain = (best_prod - 1.0) * 100.0
     return {"path": path, "gain": float(gain)}
+
 
 def calc2(data):
     """
