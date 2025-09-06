@@ -63,17 +63,15 @@ _ROMAN_MAP = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
 _VALID_ROMAN = re.compile(r'^[IVXLCDM]+$')
 
 def roman_to_int(s: str) -> int:
+    s = s.strip().upper()     # <--- add this
     if not _VALID_ROMAN.match(s):
-        raise ValueError("invalid roman characters")
+        raise ValuefError("invalid roman characters")
     total = 0
     prev = 0
     for ch in reversed(s):
         val = _ROMAN_MAP[ch]
-        if val < prev:
-            total -= val
-        else:
-            total += val
-            prev = val
+        total = total - val if val < prev else total + val
+        if val >= prev: prev = val
     if total < 1 or total > 3999:
         raise ValueError("roman out of range")
     return total
@@ -196,10 +194,15 @@ def german_to_int(s_input: str) -> int:
         raise ValueError("empty german")
     if "tausend" in s:
         left, right = s.split("tausend", 1)
+        if right.startswith("und"):
+            right = right[3:]
         left_val = 1 if left == "" else german_to_int(left)
         return left_val * 1000 + (german_to_int(right) if right else 0)
+    
     if "hundert" in s:
         left, right = s.split("hundert", 1)
+        if right.startswith("und"):
+            right = right[3:]
         left_val = 1 if left in ("", "ein", "eins") else german_to_int(left)
         return left_val * 100 + (german_to_int(right) if right else 0)
     return _parse_de_under_100(s)
@@ -291,8 +294,10 @@ def brute_force_parse_all(s: str) -> Dict[str, int]:
 
 def detect_language(s: str) -> str:
     s_stripped = s.strip()
-    if _DIGITS_ONLY.match(s_stripped): return LANG_AR
-    if s_stripped.isupper() and _VALID_ROMAN.match(s_stripped): return LANG_ROMAN
+    if _DIGITS_ONLY.match(s_stripped): 
+        return LANG_AR
+    if _VALID_ROMAN.match(s_stripped.upper()):   # <--- was requiring isupper()
+        return LANG_ROMAN
     if any(ch in s_stripped for ch in list(CN_DIGITS.keys()) + list(CN_UNITS.keys()) + list(CN_BIG_UNITS.keys())):
         return LANG_ZH_TRAD if is_traditional_cn(s_stripped) else LANG_ZH_SIMP
     low = s_stripped.lower()
@@ -389,8 +394,9 @@ def duolingo():
                 # 2) detect_language chose a parser, but another parser also succeeded with SAME value
                 #    (harmless, but useful to spot borderline cases EN/DE/ROMAN)
                 elif len(all_ok) > 1 and all_ok.get(lang) == chosen_val:
-                    others = {k: v for k, v in all_ok.items() if k != lang}
-                    logger.info(f"MULTI_ACCEPT token='{s}' chosen={lang}:{chosen_val} also_ok={others}")
+                    only_zh_dual = set(all_ok.keys()).issubset({LANG_ZH_TRAD, LANG_ZH_SIMP})
+                    if not only_zh_dual:
+                        logger.info(f"MULTI_ACCEPT token='{s}' chosen={lang}:{chosen_val} also_ok={ {k:v for k,v in all_ok.items() if k != lang} }")
 
                 # 3) detect_language chose something that DID NOT succeed (shouldn’t happen)
                 if lang not in all_ok:
