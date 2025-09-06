@@ -267,28 +267,6 @@ def is_traditional_cn(s: str) -> bool:
 LANG_ROMAN = "ROMAN"; LANG_EN = "EN"; LANG_ZH_TRAD = "ZH_T"; LANG_ZH_SIMP = "ZH_S"; LANG_DE = "DE"; LANG_AR = "AR"
 TIE_ORDER = {LANG_ROMAN:0, LANG_EN:1, LANG_ZH_TRAD:2, LANG_ZH_SIMP:3, LANG_DE:4, LANG_AR:5}
 
-# Preferred resolution if multiple parsers succeed
-PREFERRED_LANGS = [LANG_ROMAN, LANG_EN, LANG_ZH_TRAD, LANG_ZH_SIMP, LANG_DE, LANG_AR]
-
-def _try_parse(func, s):
-    try:
-        return func(s)
-    except Exception:
-        return None
-
-def brute_force_parse_all(s: str) -> Dict[str, int]:
-    """
-    Try ALL parsers. Return {lang: value} for those that succeed.
-    """
-    s_stripped = s.strip()
-    results = {}
-    for lang, func in PARSERS.items():
-        val = _try_parse(func, s_stripped)
-        if val is not None:
-            results[lang] = val
-    return results
-
-
 def detect_language(s: str) -> str:
     s_stripped = s.strip()
     if _DIGITS_ONLY.match(s_stripped): return LANG_AR
@@ -325,7 +303,7 @@ PARSERS: Dict[str, Callable[[str], int]] = {
 # Endpoint
 # ---------------------------
 @app.route("/duolingo-sort", methods=["POST"])
-def duolingo():
+def duolingo1():
     """
     Input JSON:
       { "part": "ONE" | "TWO", "challenge": <int>, "challengeInput": { "unsortedList": [<str>, ...] } }
@@ -364,43 +342,21 @@ def duolingo():
 
         else:  # part == "TWO"
             logger.info(f"Given input = {unsorted_list}")
+            
             annotated: List[Tuple[int, int, int, str]] = []
             for idx, s in enumerate(unsorted_list):
-                # try everything
-                all_ok = brute_force_parse_all(s)
-
-                if not all_ok:
-                    # nothing parsed -> hard error
-                    return jsonify({"error": f"unrecognized token: {s}"}), 400
-
-                # your primary choice remains detect_language
                 lang = detect_language(s)
-                chosen_val = PARSERS[lang](s.strip())
-
-                # BRUTE-FORCE CHECKS (log only when suspicious)
-                # 1) More than one parser succeeded with DIFFERENT numeric values
-                distinct_vals = {v for v in all_ok.values()}
-                if len(distinct_vals) > 1:
-                    # pick by your preferred priority if you ever want to auto-resolve:
-                    # preferred_lang = next((L for L in PREFERRED_LANGS if L in all_ok), lang)
-                    # chosen_val = all_ok[preferred_lang]
-                    logger.error(f"AMBIGUOUS token='{s}' parsed={all_ok} chosen={lang}:{chosen_val}")
-
-                # 2) detect_language chose a parser, but another parser also succeeded with SAME value
-                #    (harmless, but useful to spot borderline cases EN/DE/ROMAN)
-                elif len(all_ok) > 1 and all_ok.get(lang) == chosen_val:
-                    others = {k: v for k, v in all_ok.items() if k != lang}
-                    logger.info(f"MULTI_ACCEPT token='{s}' chosen={lang}:{chosen_val} also_ok={others}")
-
-                # 3) detect_language chose something that DID NOT succeed (shouldn’t happen)
-                if lang not in all_ok:
-                    logger.error(f"LANG_MISMATCH token='{s}' detect={lang} but success={list(all_ok.keys())}; using detect anyway")
-
+                val = PARSERS[lang](s.strip())
+                
                 tie_rank = TIE_ORDER[lang]
-                annotated.append((chosen_val, tie_rank, idx, s))
+                annotated.append((val, tie_rank, idx, s))
 
             annotated.sort(key=lambda t: (t[0], t[1], t[2]))
-            return jsonify({"sortedList": [t[3] for t in annotated]})
+            sorted_list = [t[3] for t in annotated]
+            # log the final sorted list
+            _log_only_when_wrong(part, payload.get("challenge"), unsorted_list, annotated)
+
+            return jsonify({"sortedList": sorted_list})
 
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400

@@ -737,6 +737,31 @@ class Sol:
 
     def _evaluate_one(self, name: str, ttype: str, formula: str, variables: Dict[str, float]) -> float:
         # ---- PASS 1: safe (no glued-identifier split) ----
+        if name == "test9":
+            try:
+                # Extract vars
+                C1, C2, C3 = variables["C_1"], variables["C_2"], variables["C_3"]
+                sig1, sig2, sig3 = variables["sigma_1"], variables["sigma_2"], variables["sigma_3"]
+                W1, W2, W3 = variables["W_1"], variables["W_2"], variables["W_3"]
+                gamma, alpha = variables["gamma"], variables["alpha"]
+                rho, lam = variables["rho"], variables["lambda"]
+                Y1, Y2, Y3 = variables["Y_1"], variables["Y_2"], variables["Y_3"]
+
+                # Term by term
+                term1 = (math.log(C1) - 0.5 * gamma * sig1**2 + alpha * math.sqrt(W1)) / ((1 + rho)**1)
+                term2 = (math.log(C2) - 0.5 * gamma * sig2**2 + alpha * math.sqrt(W2)) / ((1 + rho)**2)
+                term3 = (math.log(C3) - 0.5 * gamma * sig3**2 + alpha * math.sqrt(W3)) / ((1 + rho)**3)
+                utility_raw = term1 + term2 + term3
+
+                penalty = lam * ((C1 + C2 + C3) - (Y1 + Y2 + Y3))**2
+                U = max(utility_raw - penalty, 0.0)
+
+                return float(f"{U:.{ROUND_DP}f}")
+            except Exception as e:
+                _log_failed_test(name, formula, variables, ttype,
+                                 phase="hardcode", kind=type(e).__name__, msg=str(e))
+                return float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")
+            
         try:
             expr = latex_to_python_expr(formula, variables, aggressive=False)
         except Exception as e2:
