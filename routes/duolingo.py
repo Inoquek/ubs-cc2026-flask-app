@@ -1,30 +1,20 @@
 import os
 import re
 import logging
-import json
 from typing import List, Tuple, Dict, Callable
 from flask import request, jsonify
 from routes import app
 
 # ---------------------------
-# Logger (same style you used)
+# Minimal logger: only for targeted debug lines
 # ---------------------------
 logger = logging.getLogger(__name__)
-
-def _preview_list(items, limit=4):
-    if not isinstance(items, list):
-        return items
-    if len(items) <= limit:
-        return items
-    return items[:limit] + [f"…(+{len(items)-limit})"]
-
-def _info(event: str, **fields):
-    """One concise JSON line per request to avoid log flooding."""
-    try:
-        logger.info(json.dumps({"event": event, **fields}, ensure_ascii=False))
-    except Exception:
-        # Never let logging break the handler
-        pass
+logger.setLevel(logging.INFO)
+logger.propagate = False
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter('%(message)s'))
+    logger.addHandler(_h)
 
 # ---------------------------
 # Utilities: Roman numerals
@@ -232,7 +222,7 @@ def is_traditional_cn(s: str) -> bool:
     return True
 
 # ---------------------------
-# Language detection (for Part TWO)
+# Language detection
 # ---------------------------
 LANG_ROMAN = "ROMAN"; LANG_EN = "EN"; LANG_ZH_TRAD = "ZH_T"; LANG_ZH_SIMP = "ZH_S"; LANG_DE = "DE"; LANG_AR = "AR"
 TIE_ORDER = {LANG_ROMAN:0, LANG_EN:1, LANG_ZH_TRAD:2, LANG_ZH_SIMP:3, LANG_DE:4, LANG_AR:5}
@@ -280,36 +270,23 @@ def duolingo():
     Output JSON:
       { "sortedList": [<str>, ...] }
     """
-    challenge_id = None
-    part = None
-
     try:
         payload = request.get_json(force=True, silent=False)
     except Exception:
-        _info("error", part=part, challenge=challenge_id, message="Invalid JSON")
         return jsonify({"error": "Invalid JSON"}), 400
 
     if not isinstance(payload, dict):
-        _info("error", part=part, challenge=challenge_id, message="Invalid request root")
         return jsonify({"error": "Invalid request root"}), 400
 
     part = payload.get("part")
-    challenge_id = payload.get("challenge")
     challenge_input = payload.get("challengeInput", {})
-    unsorted_list = challenge_input.get("unsortedList")
-
     if part not in ("ONE", "TWO"):
-        _info("error", part=part, challenge=challenge_id, message="part must be 'ONE' or 'TWO'")
         return jsonify({"error": "part must be 'ONE' or 'TWO'"}), 400
     if not isinstance(challenge_input, dict):
-        _info("error", part=part, challenge=challenge_id, message="challengeInput must be an object")
         return jsonify({"error": "challengeInput must be an object"}), 400
+    unsorted_list = challenge_input.get("unsortedList")
     if not isinstance(unsorted_list, list) or not all(isinstance(x, str) for x in unsorted_list):
-        _info("error", part=part, challenge=challenge_id, message="unsortedList must be a list of strings")
         return jsonify({"error": "unsortedList must be a list of strings"}), 400
-
-    n = len(unsorted_list)
-    sample_in = _preview_list(unsorted_list)
 
     try:
         if part == "ONE":
@@ -321,41 +298,32 @@ def duolingo():
                 else:
                     values.append(roman_to_int(s2))
             values.sort()
-            out = [str(v) for v in values]
-            _info("part1_ok",
-                  challenge=challenge_id,
-                  part=part,
-                  n=n,
-                  sample=sample_in,
-                  min=values[0] if values else None,
-                  max=values[-1] if values else None)
-            return jsonify({"sortedList": out})
+            return jsonify({"sortedList": [str(v) for v in values]})
 
         else:  # part == "TWO"
             annotated: List[Tuple[int, int, int, str]] = []
             for idx, s in enumerate(unsorted_list):
                 lang = detect_language(s)
                 val = PARSERS[lang](s.strip())
+
+                # ---------- Targeted debug: ONLY German ----------
+                if lang == LANG_DE:
+                    # Minimal line, easy to grep: DE_PARSE <word> -> <value>
+                    # (No JSON to keep it extremely compact)
+                    logger.info(f"DE_PARSE {s} -> {val}")
+
                 tie_rank = TIE_ORDER[lang]
                 annotated.append((val, tie_rank, idx, s))
+
             annotated.sort(key=lambda t: (t[0], t[1], t[2]))
-            result = [t[3] for t in annotated]
-            _info("part2_ok",
-                  challenge=challenge_id,
-                  part=part,
-                  n=n,
-                  sample=sample_in,
-                  unique_values=len({t[0] for t in annotated}))
-            return jsonify({"sortedList": result})
+            return jsonify({"sortedList": [t[3] for t in annotated]})
 
     except ValueError as ve:
-        _info("error", part=part, challenge=challenge_id, message=str(ve))
         return jsonify({"error": str(ve)}), 400
     except Exception:
-        _info("error", part=part, challenge=challenge_id, message="Internal error")
         return jsonify({"error": "Internal error"}), 500
 
-# # Local run
-# if __name__ == "__main__":
-#     port = int(os.environ.get("PORT", "8080"))
-#     app.run(host="0.0.0.0", port=port)
+# Local run
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "8080"))
+    app.run(host="0.0.0.0", port=port)
