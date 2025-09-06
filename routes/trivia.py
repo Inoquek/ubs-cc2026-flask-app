@@ -9,7 +9,7 @@ from routes import app
 # hz naschest 6,7,
 # definitely correct 3,1,2,2,3, ... , 4 , 5, 4,3,3, , ,  
 #hz nascchest q.15 now - rn it's 2
-_RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,4,4,5,4,3,3,3,      3,    1,2 ,1, 1,2, -1, 1,-1,2,       1      ,4,2")
+_RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,4,4,5,4,3,3,3,      4,    1,2 ,1, 1,2, -1, 1,-1,2,       3,4,2")
 
 # new changes (not confident in them)
 # Q.24 - 4 IS CORRECT
@@ -18,11 +18,10 @@ _RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,4,4,5,4,3,3,3,      3,    1,2 ,1, 
 # Q.12 - 3 IS CORRECT
 # Q.14 - 1 IS CORRECT
 # Q.21 - 4 (deleting)
+# Q.23 - 3 IS CORRECT
 
-
-# Q.13 - not 1, 2
-# Q.23 - not 2
-# TRYING Q.13, Q.23
+# Q.13 - not 1, 2,3
+# TRYING Q.13
 
 # -1 if dk the answer yet
 # everything else is correct so far
