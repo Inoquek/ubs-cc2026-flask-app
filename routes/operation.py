@@ -8,109 +8,121 @@ import json
 import ast
 logger = logging.getLogger(__name__)
 
+def challenge1_calc(data):
+    """
+    Input:
+      data = {
+        "transformations": [ "encode_mirror_alphabet(x)", "double_consonants(x)", ... ],
+        "transformed_encrypted_word": "<ciphertext>"
+      }
+    Output: plaintext string after applying the inverse of each step in reverse order.
+    """
+    transformations = data.get("transformations") or []
+    s = data.get("transformed_encrypted_word", "")
 
+    # Accept a JSON-stringified list just in case.
+    if isinstance(transformations, str):
+        try:
+            transformations = json.loads(transformations)
+        except Exception:
+            transformations = [transformations]
 
-def challenge1_calc(data) :
-    transformations = data.get("transformations")
+    VOWELS = set("aeiouAEIOU")
 
-    logger.info(transformations)
-    encrypted_word = data.get("transformed_encrypted_word")
+    # ---------- primitives ----------
+    def atbash_char(ch: str) -> str:
+        if 'A' <= ch <= 'Z':
+            return chr(ord('Z') - (ord(ch) - ord('A')))
+        if 'a' <= ch <= 'z':
+            return chr(ord('z') - (ord(ch) - ord('a')))
+        return ch  # leave non-letters unchanged
 
-    words = encrypted_word.split()
-    transformations = transformations[::-1]
+    def atbash(s: str) -> str:
+        return "".join(atbash_char(c) for c in s)
 
-    def process_words(words, transform):
-        if transform == "mirror_words":
+    def apply_wordwise(s: str, fn):
+        # preserve exact spacing: split keeping whitespace tokens
+        parts = re.split(r'(\s+)', s)
+        return "".join(fn(p) if p and not p.isspace() else p for p in parts)
 
-            for index, word in enumerate(words):
-                words[index] = word[::-1]
+    def mirror_each_word(s: str) -> str:
+        return apply_wordwise(s, lambda w: w[::-1])
 
-        elif transform == "encode_mirror_alphabet":
-            
-            logger.info("hmmm")
-            for index, word in enumerate(words):
-                new_word = ""
-                for i in range(len(word)):
-                    if (word[i] >= 'a' and word[i] <= 'z') :
-                        start = 'a'
-                        end = 'z'
-                    else :
-                        start = 'A'
-                        end = 'Z'
-                    new_word += chr(ord(end) - (ord(word[i]) - ord(start)))
+    def swap_pairs_word(w: str) -> str:
+        ch = list(w)
+        for i in range(0, len(ch) - 1, 2):
+            ch[i], ch[i+1] = ch[i+1], ch[i]
+        return "".join(ch)
 
-                words[index] = new_word
-                logger.info(new_word)
+    def swap_pairs(s: str) -> str:
+        return apply_wordwise(s, swap_pairs_word)
 
-            logger.info(words)
-        elif transform == "toggle_case":
+    def decode_index_parity_word(w: str) -> str:
+        # inverse of: evens first, then odds
+        n = len(w)
+        e_cnt = (n + 1) // 2
+        ev, od = w[:e_cnt], w[e_cnt:]
+        out = []
+        ei = oi = 0
+        for i in range(n):
+            if i % 2 == 0:
+                out.append(ev[ei]); ei += 1
+            else:
+                out.append(od[oi]); oi += 1
+        return "".join(out)
 
-            for index, word in enumerate(words):
-                new_word = ""
-                for i in range(len(word)):
-                    if (word[i] >= 'a' and word[i] <= 'z') :
-                        start = 'a'
-                        startOther = 'A'
-                    else :
-                        start = 'A'
-                        startOther = 'a'
-                    new_word += chr(ord(startOther) + (ord(word[i]) - ord(start)))
-                words[index] = new_word
-        elif transform == "swap_pairs":
+    def decode_index_parity(s: str) -> str:
+        return apply_wordwise(s, decode_index_parity_word)
 
-            for index, word in enumerate(words):
-                new_word = ""
-                for i in range(0, len(word) - 1, 2):
-                    new_word += word[i + 1]
-                    new_word += word[i]
-                if len(word) % 2:
-                    new_word += word[-1]
+    def undouble_consonants_word(w: str) -> str:
+        # collapse ONLY true doubled consonants; keep vowels/non-letters as-is
+        out = []
+        i = 0
+        n = len(w)
+        while i < n:
+            ch = w[i]
+            if ch.isalpha() and ch not in VOWELS and i + 1 < n and w[i+1] == ch:
+                out.append(ch)
+                i += 2
+            else:
+                out.append(ch)
+                i += 1
+        return "".join(out)
 
-                words[index] = new_word
-        elif transform == "encode_index_parity":
+    def undouble_consonants(s: str) -> str:
+        return apply_wordwise(s, undouble_consonants_word)
 
-            for index, word in enumerate(words):
-                word_sz = len(word)
-                odd_pointer = (word_sz // 2) + word_sz % 2
-                even_pointer = 0
-                new_word = ""
-                for i in range(word_sz):
-                    if i % 2:
-                        new_word += word[odd_pointer]
-                        odd_pointer += 1
-                    else : 
-                        new_word += word[even_pointer]
-                        even_pointer += 1
+    # ---------- map of decoders (each is the exact inverse) ----------
+    decoders = {
+        "mirror_words":          mirror_each_word,      # self-inverse
+        "encode_mirror_alphabet": atbash,               # self-inverse (Atbash)
+        "toggle_case":           str.swapcase,          # self-inverse
+        "swap_pairs":            swap_pairs,            # self-inverse
+        "encode_index_parity":   decode_index_parity,   # true inverse
+        "double_consonants":     undouble_consonants,   # true inverse
+    }
 
-                words[index] = new_word
+    # For each transformation token (possibly nested like f(g(x))),
+    # apply inverse from OUTER to INNER, and process tokens in REVERSE list order.
+    # Example encode: step1 = f(g(x)); step2 = h(x)
+    # Decode order: inverse(h), then inverse(f), then inverse(g).
+    for token in reversed(transformations):
+        # Extract names in outer→inner order: "swap_pairs(encode_mirror_alphabet(x))" -> ["swap_pairs","encode_mirror_alphabet"]
+        names = re.findall(r'([a-z_]+)\s*\(', token)
+        if not names:
+            # Handle simple name without "(x)"
+            m = re.match(r'^\s*([a-z_]+)\s*$', token)
+            if m:
+                names = [m.group(1)]
 
-        elif transform == "double_consonants":
-            for index, word in enumerate(words):
-                new_word = ""
-                for i in range(len(word)):
-                    if word[i] in set(['a', 'o', 'e', 'u', 'i']):
-                        new_word += word[i]
-                    elif i % 2 == 0:
-                        new_word += word[i]
-                words[index] = new_word
-        
-        return words
-    
-    for transform in transformations:
-        unnested = [t.replace(")", "") for t in transform.split('(')]
-
-
-        logger.info(unnested)
-        for t in unnested:
-            if t == 'x':
+        for name in names:
+            dec = decoders.get(name)
+            if not dec:
+                logger.warning("Unknown transformation '%s' — skipping", name)
                 continue
-            words = process_words(words, t)
-        
+            s = dec(s)
 
-    final_word = " ".join(words)
-
-    return final_word
-
+    return s
 
 def challenge2_calc(data) :
    return 'a'
