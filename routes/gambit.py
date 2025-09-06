@@ -39,21 +39,27 @@ def solve_case(case):
         prev_action_attack = True
         last_front = front
 
-    time += 10
+    time += 10 # mandatory cooldown
 
-    if "expected" in case and case["expected"] != time:
-        logger.info({"event": "test_failed", "expected": case["expected"], "got": time,
-                     "reserve": reserve, "fronts": fronts, "stamina": stamina_max})
+    logger.info({ "expected": case["expected"], "got": time,
+                    "reserve": reserve, "fronts": fronts, "stamina": stamina_max})
 
     return {"time": time}
 
+TEST_CASE = 0
 @app.route("/the-mages-gambit", methods=["POST"])
 def gambit():
+    # global TEST_CASE
+    # logger.info(f"test case #{TEST_CASE}")
+    # if TEST_CASE == 0:
+    #     logger.info(payload)
+        
     if not request.is_json:
         return jsonify({"error": "Expected application/json body"}), 400
     payload = request.get_json()
     if not isinstance(payload, list):
         return jsonify({"error": "Expected a JSON array of cases"}), 400
+    
     
     try:
         result = [solve_case(case) for case in payload]
