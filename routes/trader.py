@@ -391,28 +391,6 @@ class Sol:
             out.append({"result": self._evaluate_one(name, ttype, formula, variables)})
         return out
 
-# ----------------------------------------------------------------------
-# Flask route
-# ----------------------------------------------------------------------
-@app.route('/trading-formula', methods=['POST'])
-def trading_formula():
-    """
-    Accepts: JSON array of testcases.
-    Returns: 200 + JSON array of {"result": number} for each testcase (never aborts the batch).
-    Only failed testcases are logged, as a single JSON line each.
-    """
-    tests = request.get_json(silent=True)
-    if not isinstance(tests, list):
-        # soft return: empty set, no logs
-        return jsonify([]), 200
-
-    solver = Sol(tests)
-    results = solver.solve()
-    return jsonify(results), 200
-
-
-
-
 # ------------------------- Flask Route -------------------------
 @app.route('/trading-formula', methods=['POST'])
 def trader():
