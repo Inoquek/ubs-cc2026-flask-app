@@ -9,6 +9,7 @@ COOLDOWN_MINUTES = 10
 logger = logging.getLogger(__name__)
 
 def solve_case(case):
+    logger.info(case)
     intel = case["intel"]
     reserve = case["reserve"]
     fronts = case["fronts"]
@@ -33,52 +34,20 @@ def solve_case(case):
         stamina -= 1
         if prev_action_attack and last_front == front:
             continue
+        
         time += 10
-
-
         prev_action_attack = True
         last_front = front
         
     if not(mp == reserve and stamina == stamina_max):
         time += 10 # mandatory cooldown
 
-    expected = case.get("expected")   # <-- safe lookup
-
-    if expected is not None:
-        # compare
-        if expected != time:
-            logger.info({
-                "event": "test_failed",
-                "intel": case.get("intel"),
-                "reserve": case.get("reserve"),
-                "fronts": case.get("fronts"),
-                "stamina": case.get("stamina"),
-                "expected": expected,
-                "got": time,
-            })
-    # if you emit a summary log, also guard it:
-    summary = {
-        "event": "case_summary",
-        "intel_len": len(intel),
-        "reserve": reserve,
-        "fronts": fronts,
-        "stamina": stamina_max,
-        "got": time,
-    }
-    if expected is not None:
-        summary["expected"] = expected
-        summary["mismatch"] = (expected != time)
-    logger.info(summary)
-        
+    logger.info(f"time = {time}")
     return {"time": time}
 
-# TEST_CASE = 0
+
 @app.route("/the-mages-gambit", methods=["POST"])
 def gambit():
-    # global TEST_CASE
-    # logger.info(f"test case #{TEST_CASE}")
-    # if TEST_CASE == 0:
-    #     logger.info(payload)
         
     if not request.is_json:
         return jsonify({"error": "Expected application/json body"}), 400
