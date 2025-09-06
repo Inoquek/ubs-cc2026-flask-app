@@ -106,6 +106,118 @@ _GREEK = {
     r"\Xi": "Xi", r"\Pi": "Pi", r"\Sigma": "Sigma", r"\Upsilon": "Upsilon",
     r"\Phi": "Phi", r"\Psi": "Psi", r"\Omega": "Omega",
 }
+def _drop_trailing_constraints(s: str) -> str:
+    """Drop anything after a top-level comma: 'expr , something' -> 'expr'."""
+    depth = 0
+    for idx, ch in enumerate(s):
+        if ch in "([{": depth += 1
+        elif ch in ")]}": depth -= 1 if depth > 0 else 0
+        elif ch == "," and depth == 0:
+            return s[:idx].strip()
+    return s
+
+def _resolve_t_subscripts(s: str, default_t: int = 1) -> str:
+    """Turn _{t-k} -> _<default_t-k>, and _{t} -> _<default_t>.  (Before we strip braces.)"""
+    def repl_minus(m):
+        k = int(m.group(1))
+        return f"_{max(default_t - k, 0)}"
+    s = re.sub(r"_\{t-([0-9]+)\}", repl_minus, s)
+    s = re.sub(r"_\{t\}", f"_{default_t}", s)
+    return s
+
+def _find_paren_group(s: str, i: int) -> tuple[str, int]:
+    """Given s[i]=='(', return (content, end_index)."""
+    assert s[i] == "("
+    depth = 0
+    j = i
+    while j < len(s):
+        if s[j] == "(":
+            depth += 1
+        elif s[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return s[i+1:j], j
+        j += 1
+    raise ValueError("Unbalanced parentheses")
+
+def _split_top_level_commas(s: str) -> list[str]:
+    parts, depth, buf = [], 0, []
+    for ch in s:
+        if ch in "([{": depth += 1
+        elif ch in ")]}": depth -= 1 if depth > 0 else 0
+        if ch == "," and depth == 0:
+            parts.append("".join(buf).strip()); buf = []
+        else:
+            buf.append(ch)
+    parts.append("".join(buf).strip())
+    return parts
+
+def _clean_ident_piece(x: str) -> str:
+    # Keep letters, digits, underscore; drop everything else (space, *, +, - …)
+    return re.sub(r"[^A-Za-z0-9_]+", "", x)
+
+def _normalize_symbolic_wrappers(s: str) -> str:
+    """
+    Convert Cov(X,Y) -> Cov_X_Y and Var(X) -> Var_X so they map to JSON keys
+    like Cov_DeltaS_DeltaF, Var_r_i, Var_DeltaF.
+    """
+    out = []
+    i = 0
+    while i < len(s):
+        if s.startswith("Cov(", i) or s.startswith("Var(", i):
+            name = "Cov" if s.startswith("Cov(", i) else "Var"
+            i0 = i + len(name)
+            content, j = _find_paren_group(s, i0)
+            i = j + 1
+            if name == "Cov":
+                args = _split_top_level_commas(content)
+                if len(args) != 2:
+                    # fallback: just squash everything
+                    inner = _clean_ident_piece(content)
+                    out.append(f"{name}_{inner}")
+                else:
+                    a = _clean_ident_piece(args[0])
+                    b = _clean_ident_piece(args[1])
+                    out.append(f"{name}_{a}_{b}")
+            else:  # Var
+                inner = _clean_ident_piece(content)
+                out.append(f"{name}_{inner}")
+        else:
+            out.append(s[i]); i += 1
+    return "".join(out)
+
+def _caret_to_pow(s: str) -> str:
+    """
+    Convert a^{b} -> (a**(b)) and then any remaining '^' -> '**'.
+    """
+    out = []
+    i = 0
+    while i < len(s):
+        if s[i] == "^":
+            # look back for a base token (greedy)
+            base_start = i - 1
+            while base_start >= 0 and re.match(r"[A-Za-z0-9_\)\]]", s[base_start]):
+                base_start -= 1
+            base = s[base_start+1:i]
+            i += 1
+            if i < len(s) and s[i] == "{":
+                inner, j = _find_braced(s, i)
+                i = j + 1
+                out.append(f"({base}**({inner}))")
+            else:
+                # simple exponent token (name/number/parenthesized)
+                # collect a simple name/number
+                m = re.match(r"[A-Za-z0-9_]+", s[i:])
+                if m:
+                    exp_tok = m.group(0)
+                    i += len(exp_tok)
+                    out.append(f"({base}**{exp_tok})")
+                else:
+                    out.append(base + "**")  # let later parse complain if malformed
+        else:
+            out.append(s[i]); i += 1
+    s2 = "".join(out)
+    return s2.replace("^", "**")  # final safety
 
 def _strip_math_delims(s: str) -> str:
     s = s.strip()
@@ -235,17 +347,21 @@ def _strip_redundant_braces(s: str) -> str:
 def _preprocess_base(latex: str) -> str:
     s = _strip_math_delims(latex)
     s = _rhs_of_equals(s)
+    s = _drop_trailing_constraints(s)        # NEW: drop ", q=1-p" style tails
     s = _replace_text_vars(s)
     s = _replace_greek(s)
+    s = _resolve_t_subscripts(s, default_t=1)  # NEW: handle _{t-1}, _{t}
     s = _normalize_indices(s)
     s = _normalize_basic_ops(s)
+    s = _normalize_symbolic_wrappers(s)      # NEW: Cov(...), Var(...) -> variable ids
     s = _transform_frac(s)
     s = _transform_sqrt(s)
-    s = _transform_power_e(s)     # only e^{...}
-    s = _normalize_funcs_to_python(s)
+    s = _transform_power_e(s)                # e^{...}
+    s = _normalize_funcs_to_python(s)        # log/exp -> math.log/exp
     s = _insert_implicit_mult(s)
     s = _strip_redundant_braces(s)
     return s.strip()
+
 
 def _caret_to_pow(s: str) -> str:
     """Convert remaining '^' to Python '**' AFTER sums are expanded."""
@@ -254,6 +370,16 @@ def _caret_to_pow(s: str) -> str:
 # ----------------------------------------------------------------------
 # Summation (\sum) support (accepts \sum_{i=1}^{N} and \sum_i=1^N)
 # ----------------------------------------------------------------------
+def _drop_trailing_constraints(s: str) -> str:
+    """Drop anything after a top-level comma: 'expr , something' -> 'expr'."""
+    depth = 0
+    for idx, ch in enumerate(s):
+        if ch in "([{": depth += 1
+        elif ch in ")]}": depth -= 1 if depth > 0 else 0
+        elif ch == "," and depth == 0:
+            return s[:idx].strip()
+    return s
+r
 def _parse_sum_header(s: str, start: int) -> Optional[Tuple[int, int, str, str, str]]:
     if not s.startswith(r"\sum_", start): return None
     i = start; hdr_start = i; i += len(r"\sum_")
@@ -307,18 +433,28 @@ def _eval_one_sum(s: str, variables: Dict[str, float]) -> str:
     occ = _find_first_sum(s)
     if not occ: return s
     hdr_start, hdr_end, var, lower_expr, upper_expr, body, end_after_body = occ
+
     env = _build_env(variables)
+
     lower_py = _caret_to_pow(_preprocess_base(lower_expr))
     upper_py = _caret_to_pow(_preprocess_base(upper_expr))
     body_py  = _caret_to_pow(_preprocess_base(body))
+
     start_val = int(round(_safe_eval(lower_py, env)))
     end_val   = int(round(_safe_eval(upper_py, env)))
+
+    # identifiers like CF_t, PD_i, Var_r_i → replace final _<var> with _<k>
+    patt = re.compile(rf"\b([A-Za-z][A-Za-z0-9_]*)_{var}\b")
+
     total = 0.0
     for k in range(start_val, end_val + 1):
         env_iter = dict(env); env_iter[var] = k
-        total += float(_safe_eval(body_py, env_iter))
+        body_k = patt.sub(rf"\1_{k}", body_py)
+        total += float(_safe_eval(body_k, env_iter))
+
     prefix = s[:hdr_start]; suffix = s[end_after_body:]
     return f"{prefix}({total}){suffix}"
+
 
 def _expand_all_sums(s: str, variables: Dict[str, float]) -> str:
     prev = None; cur = s; safety = 0
@@ -329,16 +465,22 @@ def _expand_all_sums(s: str, variables: Dict[str, float]) -> str:
         prev = cur
         cur = _eval_one_sum(cur, variables)
     return cur
+def _resolve_free_i_with_N(s: str, variables: Dict[str, float]) -> str:
+    if "N" not in variables: return s
+    N = int(round(float(variables["N"])))
+    return re.sub(r"\b([A-Za-z][A-Za-z0-9_]*)_i\b", rf"\1_{N}", s)
 
 # ----------------------------------------------------------------------
 # LaTeX → Python expression
 # ----------------------------------------------------------------------
 def latex_to_python_expr(latex: str, variables: Dict[str, float]) -> str:
-    s = _preprocess_base(latex)          # may raise
-    s = _expand_all_sums(s, variables)   # may raise
-    s = _caret_to_pow(s)
+    s = _preprocess_base(latex)
+    s = _expand_all_sums(s, variables)
+    s = _resolve_free_i_with_N(s, variables)   # NEW
+    s = _caret_to_pow(s)                        # now handle ^ and ^{...}
     s = re.sub(r"\s+", "", s)
     return s
+
 
 # ----------------------------------------------------------------------
 # Environment
