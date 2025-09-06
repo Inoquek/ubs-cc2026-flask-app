@@ -38,10 +38,8 @@ def solve_case(case):
         best = float('inf')
 
         # Option 1: Cooldown first (always allowed)
-        best = min(
-            best,
-            COOLDOWN_MINUTES + dp(i, reserve, stamina_max, 0)  # chain broken
-        )
+        if not (mp == reserve and stamina == stamina_max and chain == 0):
+            best = min(best, COOLDOWN_MINUTES + dp(i, reserve, stamina_max, 0))
 
         # Option 2: Attack now (only if resources allow)
         if cost_i <= mp and stamina > 0:
@@ -81,3 +79,5 @@ def gambit():
         return jsonify({"error": str(e)}), 400
 
     return jsonify(result), 200
+if not (mp == reserve and stamina == stamina_max and chain == 0):
+    best = min(best, COOLDOWN_MINUTES + dp(i, reserve, stamina_max, 0))
