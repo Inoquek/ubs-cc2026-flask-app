@@ -19,7 +19,7 @@ def solve_case(case):
     stamina = stamina_max
     prev_action_attack = False
     last_front = None
-
+    
     for idx, (front, mp_cost) in enumerate(intel, start=1):
 
 
@@ -31,15 +31,16 @@ def solve_case(case):
 
         mp -= mp_cost
         stamina -= 1
-
-        if not(prev_action_attack and last_front == front):
-            time += 10
+        if prev_action_attack and last_front == front:
+            continue
+        time += 10
 
 
         prev_action_attack = True
         last_front = front
-
-    time += 10 # mandatory cooldown
+        
+    if not(mp == reserve and stamina == stamina_max):
+        time += 10 # mandatory cooldown
 
     expected = case.get("expected")   # <-- safe lookup
 
