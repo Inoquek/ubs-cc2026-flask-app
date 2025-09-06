@@ -73,7 +73,7 @@ class Sol:
 @app.route('/ticketing-agent', methods=['POST'])
 def evaluate():
     data = request.get_json(silent=True) or {}
-    logger.info("data sent for evaluation %s", data)
+    # logger.info("data sent for evaluation %s", data)
 
     # Extract required fields
     try:
@@ -88,5 +88,5 @@ def evaluate():
         solution = solver.solve()
         return jsonify(solution), 200
     except Exception as e:
-        logger.exception("Failed to compute solution")
+        # logger.exception("Failed to compute solution")
         return jsonify(error=str(e)), 400
