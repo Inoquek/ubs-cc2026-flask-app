@@ -349,33 +349,143 @@ def _strip_redundant_braces(s: str) -> str:
 
 def _caret_to_pow(s: str) -> str:
     """
-    Convert a^{b} -> (a**(b)) and then any remaining '^' -> '**'.
+    Robustly convert a^{b} or (a)^{b} or (a)^b into (a**(b)).
+    Also handles [...] as a grouped base. Any remaining '^' fall back to '**'.
     """
-    out = []; i = 0
-    while i < len(s):
-        if s[i] == "^":
-            # find base
-            base_start = i - 1
-            while base_start >= 0 and re.match(r"[A-Za-z0-9_\)\]]", s[base_start]):
-                base_start -= 1
-            base = s[base_start+1:i]
+    def find_matching_open(src: str, pos_close: int, open_ch: str, close_ch: str) -> int:
+        depth = 0
+        j = pos_close
+        while j >= 0:
+            ch = src[j]
+            if ch == close_ch:
+                depth += 1
+            elif ch == open_ch:
+                depth -= 1
+                if depth == 0:
+                    return j
+            j -= 1
+        return -1  # not found
+
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        if s[i] != '^':
+            out.append(s[i])
             i += 1
-            if i < len(s) and s[i] == "{":
-                inner, j = _find_braced(s, i)
-                i = j + 1
-                out.append(f"({base}**({inner}))")
-            else:
-                m = re.match(r"[A-Za-z0-9_]+", s[i:])
-                if m:
-                    exp_tok = m.group(0)
-                    i += len(exp_tok)
-                    out.append(f"({base}**{exp_tok})")
-                else:
-                    out.append(base + "**")
+            continue
+
+        # ----- Determine the base -----
+        # Look one char left of '^'
+        if not out:
+            # no base; emit '^' literally (edge case)
+            out.append('^')
+            i += 1
+            continue
+
+        # We have already accumulated left-side chars in `out`;
+        # inspect the last char of `out`.
+        left_last = out[-1]
+
+        # Case A: Parenthesized base (...)^X
+        if left_last == ')':
+            # Find matching '(' in the *already-built* out buffer.
+            # Convert out -> string to search backwards.
+            left_str = ''.join(out)
+            pos_close = len(left_str) - 1
+            pos_open = find_matching_open(left_str, pos_close, '(', ')')
+            if pos_open == -1:
+                # If not found, keep literal '^' (fail safe)
+                out.append('^')
+                i += 1
+                continue
+            base = left_str[pos_open:pos_close+1]  # includes parentheses
+            # Remove the base we just extracted from out; we will re-insert wrapped.
+            out = list(left_str[:pos_open])
+
+        # Case B: Bracketed base [...]^X
+        elif left_last == ']':
+            left_str = ''.join(out)
+            pos_close = len(left_str) - 1
+            pos_open = find_matching_open(left_str, pos_close, '[', ']')
+            if pos_open == -1:
+                out.append('^')
+                i += 1
+                continue
+            base = left_str[pos_open:pos_close+1]  # includes brackets
+            out = list(left_str[:pos_open])
+
+        # Case C: Simple token base like A_B, x1, sigma_t
         else:
-            out.append(s[i]); i += 1
-    s2 = "".join(out)
-    return s2.replace("^", "**")
+            # Walk left over [A-Za-z0-9_]
+            left_str = ''.join(out)
+            j = len(left_str) - 1
+            while j >= 0 and re.match(r'[A-Za-z0-9_]', left_str[j]):
+                j -= 1
+            base = left_str[j+1:]
+            out = list(left_str[:j+1])
+            if not base:
+                # nothing found; leave '^' as-is
+                out.append('^')
+                i += 1
+                continue
+
+        # Move past '^'
+        i += 1
+        if i >= n:
+            # dangling '^' at end; stitch back naive
+            out.append(base + '**')
+            break
+
+        # ----- Determine the exponent -----
+        if s[i] == '{':
+            # brace group ^{...}
+            inner, j = _find_braced(s, i)  # returns content, end_index_of_'}'
+            exponent = f'({inner})'
+            i = j + 1
+        elif s[i] == '(':
+            # parenthesis group ^(...)
+            # find matching ')'
+            depth = 0
+            j = i
+            while j < n:
+                if s[j] == '(':
+                    depth += 1
+                elif s[j] == ')':
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            if j >= n:
+                # unmatched; treat as simple token from '(' to end
+                exponent = s[i:]
+                i = n
+            else:
+                exponent = s[i:j+1]  # keep parens
+                i = j + 1
+        else:
+            # simple token exponent ^t or ^2
+            m = re.match(r'[A-Za-z0-9_]+', s[i:])
+            if m:
+                tok = m.group(0)
+                exponent = tok
+                i += len(tok)
+            else:
+                # nothing usable; emit '**' and continue
+                out.append(f'({base}**')
+                continue
+
+        # Emit (base**exponent) — ensure base is wrapped in () if not already
+        need_wrap_base = not (base.startswith('(') and base.endswith(')')) and \
+                         not (base.startswith('[') and base.endswith(']'))
+        base_wrapped = f'({base})' if need_wrap_base else base
+        out.append(f'({base_wrapped}**{exponent})')
+
+    s2 = ''.join(out)
+    # Fallback: convert any stray '^' to '**' (should be rare after above)
+    s2 = s2.replace('^', '**')
+    return s2
+
 
 # ----------------------------------------------------------------------
 # Constraint handling (split once, apply once)
