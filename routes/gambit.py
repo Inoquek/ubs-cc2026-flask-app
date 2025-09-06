@@ -46,7 +46,7 @@ def solve_case(case):
 
     return {"time": time}
 
-TEST_CASE = 0
+# TEST_CASE = 0
 @app.route("/the-mages-gambit", methods=["POST"])
 def gambit():
     # global TEST_CASE
@@ -57,6 +57,7 @@ def gambit():
     if not request.is_json:
         return jsonify({"error": "Expected application/json body"}), 400
     payload = request.get_json()
+    
     if not isinstance(payload, list):
         return jsonify({"error": "Expected a JSON array of cases"}), 400
     
