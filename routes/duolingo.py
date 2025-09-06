@@ -1,15 +1,14 @@
 import os
 import re
+import time
 import logging
-from typing import List, Tuple, Dict, Callable
+from typing import List, Tuple, Dict, Callable, Optional
 from flask import request, jsonify
 from routes import app
-
 from collections import defaultdict
 
-        
 # ---------------------------
-# Minimal logger: only for targeted debug lines
+# Minimal logger
 # ---------------------------
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -19,43 +18,47 @@ if not logger.handlers:
     _h.setFormatter(logging.Formatter('%(message)s'))
     logger.addHandler(_h)
 
+# ---------------------------
+# Helpers for validation / comparison
+# ---------------------------
 
-def _log_only_when_wrong(part: str, challenge, unsorted_list, annotated):
+def _safe_preview(seq, n=5):
+    if not isinstance(seq, list):
+        return seq
+    return seq[:n] + ([f"...(+{len(seq)-n})"] if len(seq) > n else [])
+
+def _compare_and_log(
+    part: str,
+    challenge: Optional[int],
+    ours: List[str],
+    expected: Optional[List[str]],
+):
     """
-    annotated = list of tuples: (value, tie_rank, idx, original)
-    Logs nothing if everything looks correct.
-    Logs a single compact ERROR line if any check fails.
+    Compare our sortedList against expected (if provided). Log only on mismatch.
     """
-    issues = []
+    if not expected:
+        return  # nothing to compare against
 
-    # A) Numeric order must be non-decreasing
-    for i in range(1, len(annotated)):
-        v_prev, _, _, s_prev = annotated[i-1]
-        v_curr, _, _, s_curr = annotated[i]
-        if v_curr < v_prev:
-            issues.append(f"ORDER i={i} prev='{s_prev}'({v_prev}) > curr='{s_curr}'({v_curr})")
-            break  # one is enough to flag
+    if ours == expected:
+        # Silent on success to avoid noise
+        return
 
-    # B) Within equal numeric values, tie ranks must follow your policy order
-    if not issues:
-        by_value = defaultdict(list)  # value -> [(tie, idx, s), ...] in final order
-        for (v, tie, idx, s) in annotated:
-            by_value[v].append((tie, idx, s))
-        for v, group in by_value.items():
-            expected = sorted(group, key=lambda x: (x[0], x[1]))  # (tie, idx)
-            if group != expected:
-                got = [s for (_, _, s) in group]
-                exp = [s for (_, _, s) in expected]
-                issues.append(f"TIE value={v} got={got} expected={exp}")
-                break
+    # Mismatch: log a concise summary + up to 5 diffs (index, ours, expected)
+    diffs = []
+    L = max(len(ours), len(expected))
+    for i in range(L):
+        a = ours[i] if i < len(ours) else None
+        b = expected[i] if i < len(expected) else None
+        if a != b:
+            diffs.append((i, a, b))
+        if len(diffs) >= 5:
+            break
 
-    if issues:
-        # Keep log tiny: first 5 inputs & first issue only
-        logger.error(
-            "WRONG part=%s challenge=%s n=%d sample_in=%s issue=%s",
-            part, str(challenge), len(unsorted_list), unsorted_list[:5], issues[0]
-        )
-        
+    logger.error(
+        "COMPARE_FAIL part=%s challenge=%s len_ours=%d len_exp=%d diffs=%s",
+        part, str(challenge), len(ours), len(expected), diffs
+    )
+
 # ---------------------------
 # Utilities: Roman numerals
 # ---------------------------
@@ -63,15 +66,16 @@ _ROMAN_MAP = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
 _VALID_ROMAN = re.compile(r'^[IVXLCDM]+$')
 
 def roman_to_int(s: str) -> int:
-    s = s.strip().upper()     # <--- add this
+    s = s.strip().upper()
     if not _VALID_ROMAN.match(s):
-        raise ValuefError("invalid roman characters")
+        raise ValueError("invalid roman characters")
     total = 0
     prev = 0
     for ch in reversed(s):
         val = _ROMAN_MAP[ch]
         total = total - val if val < prev else total + val
-        if val >= prev: prev = val
+        if val >= prev:
+            prev = val
     if total < 1 or total > 3999:
         raise ValueError("roman out of range")
     return total
@@ -87,7 +91,7 @@ def arabic_to_int(s: str) -> int:
     return int(s)
 
 # ---------------------------
-# English words (kept for Part TWO completeness)
+# English
 # ---------------------------
 _EN_UNITS = {
     "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
@@ -198,7 +202,6 @@ def german_to_int(s_input: str) -> int:
             right = right[3:]
         left_val = 1 if left == "" else german_to_int(left)
         return left_val * 1000 + (german_to_int(right) if right else 0)
-    
     if "hundert" in s:
         left, right = s.split("hundert", 1)
         if right.startswith("und"):
@@ -260,8 +263,13 @@ def chinese_to_int(s: str) -> int:
     return val
 
 def is_traditional_cn(s: str) -> bool:
+    # Prefer script-specific hints first
+    if '兩' in s: return True
+    if '两' in s: return False
+    # Big units
     if any(ch in s for ch in ("萬","億")): return True
     if any(ch in s for ch in ("万","亿")): return False
+    # Ambiguous → default Traditional
     return True
 
 # ---------------------------
@@ -291,12 +299,11 @@ def brute_force_parse_all(s: str) -> Dict[str, int]:
             results[lang] = val
     return results
 
-
 def detect_language(s: str) -> str:
     s_stripped = s.strip()
-    if _DIGITS_ONLY.match(s_stripped): 
+    if _DIGITS_ONLY.match(s_stripped):
         return LANG_AR
-    if _VALID_ROMAN.match(s_stripped.upper()):   # <--- was requiring isupper()
+    if _VALID_ROMAN.match(s_stripped.upper()):
         return LANG_ROMAN
     if any(ch in s_stripped for ch in list(CN_DIGITS.keys()) + list(CN_UNITS.keys()) + list(CN_BIG_UNITS.keys())):
         return LANG_ZH_TRAD if is_traditional_cn(s_stripped) else LANG_ZH_SIMP
@@ -306,7 +313,8 @@ def detect_language(s: str) -> str:
                               "ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen","eighteen","nineteen",
                               "twenty","thirty","forty","fifty","sixty","seventy","eighty","ninety"]):
         return LANG_EN
-    if any(k in _normalize_de(low) for k in _DE_KEYWORDS): return LANG_DE
+    if any(k in _normalize_de(low) for k in _DE_KEYWORDS):
+        return LANG_DE
     try:
         english_to_int(s_stripped); return LANG_EN
     except Exception:
@@ -327,16 +335,59 @@ PARSERS: Dict[str, Callable[[str], int]] = {
 }
 
 # ---------------------------
+# Self-check: structural correctness (no expected needed)
+# ---------------------------
+def _log_only_when_wrong(part: str, challenge, unsorted_list, annotated):
+    """
+    annotated = list of tuples: (value, tie_rank, idx, original)
+    Logs nothing if everything looks correct.
+    Logs a single compact ERROR line if any check fails.
+    """
+    issues = []
+
+    # A) Numeric order must be non-decreasing
+    for i in range(1, len(annotated)):
+        v_prev, _, _, s_prev = annotated[i-1]
+        v_curr, _, _, s_curr = annotated[i]
+        if v_curr < v_prev:
+            issues.append(f"ORDER i={i} prev='{s_prev}'({v_prev}) > curr='{s_curr}'({v_curr})")
+            break
+
+    # B) Within equal numeric values, tie ranks must follow your policy order
+    if not issues:
+        by_value = defaultdict(list)  # value -> [(tie, idx, s), ...] in final order
+        for (v, tie, idx, s) in annotated:
+            by_value[v].append((tie, idx, s))
+        for v, group in by_value.items():
+            expected = sorted(group, key=lambda x: (x[0], x[1]))  # (tie, idx)
+            if group != expected:
+                got = [s for (_, _, s) in group]
+                exp = [s for (_, _, s) in expected]
+                issues.append(f"TIE value={v} got={got} expected={exp}")
+                break
+
+    if issues:
+        logger.error(
+            "WRONG part=%s challenge=%s n=%d sample_in=%s issue=%s",
+            part, str(challenge), len(unsorted_list), _safe_preview(unsorted_list), issues[0]
+        )
+
+# ---------------------------
 # Endpoint
 # ---------------------------
 @app.route("/duolingo-sort", methods=["POST"])
 def duolingo():
     """
     Input JSON:
-      { "part": "ONE" | "TWO", "challenge": <int>, "challengeInput": { "unsortedList": [<str>, ...] } }
+      { "part": "ONE" | "TWO", "challenge": <int>,
+        "challengeInput": { "unsortedList": [<str>, ...], "expectedSortedList"?: [<str>, ...] },
+        "expectedSortedList"?: [<str>, ...]
+      }
     Output JSON:
       { "sortedList": [<str>, ...] }
     """
+    start = time.perf_counter()
+
     try:
         payload = request.get_json(force=True, silent=False)
     except Exception:
@@ -346,14 +397,23 @@ def duolingo():
         return jsonify({"error": "Invalid request root"}), 400
 
     part = payload.get("part")
+    challenge = payload.get("challenge")
     challenge_input = payload.get("challengeInput", {})
+
+    # Lightweight START log (one per request)
+    logger.info("START part=%s challenge=%s", part, str(challenge))
+
     if part not in ("ONE", "TWO"):
         return jsonify({"error": "part must be 'ONE' or 'TWO'"}), 400
     if not isinstance(challenge_input, dict):
         return jsonify({"error": "challengeInput must be an object"}), 400
+
     unsorted_list = challenge_input.get("unsortedList")
     if not isinstance(unsorted_list, list) or not all(isinstance(x, str) for x in unsorted_list):
         return jsonify({"error": "unsortedList must be a list of strings"}), 400
+
+    # Optional ground truth: accept either in root or in challengeInput
+    expected_sorted = payload.get("expectedSortedList") or challenge_input.get("expectedSortedList")
 
     try:
         if part == "ONE":
@@ -365,52 +425,63 @@ def duolingo():
                 else:
                     values.append(roman_to_int(s2))
             values.sort()
-            return jsonify({"sortedList": [str(v) for v in values]})
+            out = [str(v) for v in values]
+
+            # Optional comparison logging (includes challenge)
+            _compare_and_log(part, challenge, out, expected_sorted)
+
+            # DONE log
+            ms = round((time.perf_counter() - start) * 1000)
+            logger.info("DONE part=%s challenge=%s n=%d ms=%d", part, str(challenge), len(unsorted_list), ms)
+
+            return jsonify({"sortedList": out})
 
         else:  # part == "TWO"
-            logger.info(f"Given input = {unsorted_list}")
             annotated: List[Tuple[int, int, int, str]] = []
             for idx, s in enumerate(unsorted_list):
-                # try everything
+                # Brute-force try everything (instrumentation)
                 all_ok = brute_force_parse_all(s)
-
                 if not all_ok:
-                    # nothing parsed -> hard error
                     return jsonify({"error": f"unrecognized token: {s}"}), 400
 
-                # your primary choice remains detect_language
                 lang = detect_language(s)
                 chosen_val = PARSERS[lang](s.strip())
 
-                # BRUTE-FORCE CHECKS (log only when suspicious)
-                # 1) More than one parser succeeded with DIFFERENT numeric values
+                # Ambiguity / multi-accept diagnostics (quiet for ZH_T vs ZH_S same-value)
                 distinct_vals = {v for v in all_ok.values()}
                 if len(distinct_vals) > 1:
-                    # pick by your preferred priority if you ever want to auto-resolve:
-                    # preferred_lang = next((L for L in PREFERRED_LANGS if L in all_ok), lang)
-                    # chosen_val = all_ok[preferred_lang]
-                    logger.error(f"AMBIGUOUS token='{s}' parsed={all_ok} chosen={lang}:{chosen_val}")
-
-                # 2) detect_language chose a parser, but another parser also succeeded with SAME value
-                #    (harmless, but useful to spot borderline cases EN/DE/ROMAN)
+                    logger.error(f"AMBIGUOUS part={part} challenge={challenge} token='{s}' parsed={all_ok} chosen={lang}:{chosen_val}")
                 elif len(all_ok) > 1 and all_ok.get(lang) == chosen_val:
                     only_zh_dual = set(all_ok.keys()).issubset({LANG_ZH_TRAD, LANG_ZH_SIMP})
                     if not only_zh_dual:
-                        logger.info(f"MULTI_ACCEPT token='{s}' chosen={lang}:{chosen_val} also_ok={ {k:v for k,v in all_ok.items() if k != lang} }")
+                        logger.info(f"MULTI_ACCEPT part={part} challenge={challenge} token='{s}' chosen={lang}:{chosen_val} also_ok={ {k:v for k,v in all_ok.items() if k != lang} }")
 
-                # 3) detect_language chose something that DID NOT succeed (shouldn’t happen)
                 if lang not in all_ok:
-                    logger.error(f"LANG_MISMATCH token='{s}' detect={lang} but success={list(all_ok.keys())}; using detect anyway")
+                    logger.error(f"LANG_MISMATCH part={part} challenge={challenge} token='{s}' detect={lang} but success={list(all_ok.keys())}; using detect anyway")
 
                 tie_rank = TIE_ORDER[lang]
                 annotated.append((chosen_val, tie_rank, idx, s))
 
             annotated.sort(key=lambda t: (t[0], t[1], t[2]))
-            return jsonify({"sortedList": [t[3] for t in annotated]})
+            sorted_list = [t[3] for t in annotated]
+
+            # Structural self-check (no ground truth needed)
+            _log_only_when_wrong(part, challenge, unsorted_list, annotated)
+
+            # Optional ground-truth comparison (if provided)
+            _compare_and_log(part, challenge, sorted_list, expected_sorted)
+
+            # DONE log
+            ms = round((time.perf_counter() - start) * 1000)
+            logger.info("DONE part=%s challenge=%s n=%d ms=%d", part, str(challenge), len(unsorted_list), ms)
+
+            return jsonify({"sortedList": sorted_list})
 
     except ValueError as ve:
+        logger.error(f"FAIL part={part} challenge={challenge} reason={ve} sample={_safe_preview(unsorted_list)}")
         return jsonify({"error": str(ve)}), 400
     except Exception:
+        logger.error(f"FAIL part={part} challenge={challenge} reason=InternalError sample={_safe_preview(unsorted_list)}")
         return jsonify({"error": "Internal error"}), 500
 
 # Local run
