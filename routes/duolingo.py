@@ -307,10 +307,10 @@ def duolingo():
                 val = PARSERS[lang](s.strip())
 
                 # ---------- Targeted debug: ONLY German ----------
-                if lang == LANG_DE:
+                if lang == LANG_EN:
                     # Minimal line, easy to grep: DE_PARSE <word> -> <value>
                     # (No JSON to keep it extremely compact)
-                    logger.info(f"DE_PARSE {s} -> {val}")
+                    logger.info(f"Parsing {s} -> {val}")
 
                 tie_rank = TIE_ORDER[lang]
                 annotated.append((val, tie_rank, idx, s))
