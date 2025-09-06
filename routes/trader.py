@@ -2,15 +2,35 @@ import logging
 import math
 import re
 import ast
+import json
 from typing import Dict, List, Any, Tuple, Optional
 
 from flask import request, jsonify
 from routes import app
-
 # Logging
 # ----------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+
+# ----------------------------------------------------------------------
+# Logging: only failed testcases
+# ----------------------------------------------------------------------
+# NOTE: By default we log to stdout (so PaaS logs pick it up).
+# If you prefer a file, add a FileHandler to FAIL_LOGGER.
+FAIL_LOGGER = logging.getLogger(__name__)
+FAIL_LOGGER.setLevel(logging.ERROR)
+
+def _log_failed_test(name: str, formula: str, variables: Dict[str, Any], ttype: str,
+                     phase: str, kind: str, msg: str) -> None:
+    """Emit exactly one JSON line per failed testcase with only input + compact error."""
+    entry = {
+        "event": "test_failed",
+        "name": name,
+        "type": ttype,
+        "formula": formula,
+        "variables": variables,
+        "error": {"phase": phase, "kind": kind, "msg": msg[:200]}
+    }
+    FAIL_LOGGER.error(json.dumps(entry, ensure_ascii=False))
 
 # ----------------------------------------------------------------------
 # Config
@@ -34,38 +54,6 @@ _ALLOWED_NODES = (
 
 _ALLOWED_BIN_OPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod)
 _ALLOWED_UNARY_OPS = (ast.UAdd, ast.USub)
-
-def _short(s: str, n: int = 180) -> str:
-    s = s.replace("\n", " ")
-    return s if len(s) <= n else s[:n] + "…"
-
-def _ops_present(expr: str) -> List[str]:
-    ops = []
-    if r"\frac" in expr or ("((" in expr and ")/(" in expr):
-        ops.append("frac/div")
-    if "max(" in expr: ops.append("max")
-    if "min(" in expr: ops.append("min")
-    if r"\sum" in expr or "⟪SUM⟫" in expr: ops.append("sum")
-    if "math.exp(" in expr: ops.append("exp")
-    if "math.log(" in expr: ops.append("log")
-    if "**" in expr: ops.append("pow")
-    if "*" in expr: ops.append("mul")
-    if "/" in expr: ops.append("div")
-    if "+" in expr: ops.append("add")
-    if re.search(r'[A-Za-z0-9_]\*\(', expr): ops.append("implicit*")
-    return ops
-
-def _find_unbound_names(expr: str, env_keys: set) -> List[str]:
-    try:
-        tree = ast.parse(expr, mode="eval")
-    except Exception:
-        return []
-    names = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name):
-            if node.id not in {"math", "max", "min"}:
-                names.add(node.id)
-    return sorted(list(names - set(env_keys)))
 
 def _safe_eval(expr: str, env: Dict[str, Any]) -> float:
     """Safely evaluate arithmetic expression using a restricted AST."""
@@ -100,26 +88,9 @@ def _safe_eval(expr: str, env: Dict[str, Any]) -> float:
             return
         raise ValueError(f"Disallowed expression node: {type(node).__name__}")
 
-    try:
-        tree = ast.parse(expr, mode="eval")
-    except Exception as e:
-        logger.warning("phase=ast_parse kind=%s msg=%s expr=%s",
-                       type(e).__name__, _short(str(e)), _short(expr)); raise
-    try:
-        _check(tree)
-    except Exception as e:
-        logger.warning("phase=ast_check kind=%s msg=%s expr=%s ops=%s",
-                       type(e).__name__, _short(str(e)), _short(expr), _ops_present(expr)); raise
-
-    missing = _find_unbound_names(expr, set(env.keys()))
-    if missing:
-        logger.warning("phase=pre_eval_missing_vars missing=%s expr=%s", missing, _short(expr))
-
-    try:
-        return eval(compile(tree, "<expr>", "eval"), {"__builtins__": {}}, env)
-    except Exception as e:
-        logger.warning("phase=eval kind=%s msg=%s expr=%s ops=%s",
-                       type(e).__name__, _short(str(e)), _short(expr), _ops_present(expr)); raise
+    tree = ast.parse(expr, mode="eval")
+    _check(tree)
+    return eval(compile(tree, "<expr>", "eval"), {"__builtins__": {}}, env)
 
 # ----------------------------------------------------------------------
 # LaTeX preprocessing
@@ -216,7 +187,7 @@ def _transform_sqrt(s: str) -> str:
     return "".join(out)
 
 def _transform_power_e(s: str) -> str:
-    """Handle e^{...} -> (e**(...)). NOTE: does NOT convert '^' globally here."""
+    """Handle e^{...} -> (e**(...)). We convert other '^' later, after sums."""
     out = []; i = 0
     while i < len(s):
         if s.startswith("e^{", i):
@@ -238,7 +209,7 @@ def _normalize_funcs_to_python(s: str) -> str:
 def _insert_implicit_mult(s: str) -> str:
     """
     Insert '*' for implicit multiplication, while protecting true calls.
-    Uses a sentinel '⟬' to temporarily remove '(' from known calls so the
+    Uses a sentinel '⟬' to temporarily hide '(' from known calls so the
     regex won't insert '*' between name and '('.
     """
     protos = {
@@ -249,7 +220,7 @@ def _insert_implicit_mult(s: str) -> str:
     }
     for k, v in protos.items(): s = s.replace(k, v)
 
-    # A( -> A*( ;  )( or )x -> )*x ; 2x -> 2*x ; x y -> x*y ; (a+b)(c+d) -> (a+b)*(c+d)
+    # A( -> A*( |  )( or )x -> )*x | 2x -> 2*x | x y -> x*y | (a+b)(c+d) -> (a+b)*(c+d)
     s = re.sub(r'([0-9A-Za-z_)\]])\s*\(', r'\1*(', s)
     s = re.sub(r'\)\s*([0-9A-Za-z_])', r')*\1', s)
     s = re.sub(r'(\d)\s*([A-Za-z_])', r'\1*\2', s)
@@ -270,7 +241,7 @@ def _preprocess_base(latex: str) -> str:
     s = _normalize_basic_ops(s)
     s = _transform_frac(s)
     s = _transform_sqrt(s)
-    s = _transform_power_e(s)          # only e^{...}
+    s = _transform_power_e(s)     # only e^{...}
     s = _normalize_funcs_to_python(s)
     s = _insert_implicit_mult(s)
     s = _strip_redundant_braces(s)
@@ -284,72 +255,41 @@ def _caret_to_pow(s: str) -> str:
 # Summation (\sum) support (accepts \sum_{i=1}^{N} and \sum_i=1^N)
 # ----------------------------------------------------------------------
 def _parse_sum_header(s: str, start: int) -> Optional[Tuple[int, int, str, str, str]]:
-    """
-    Parse header at s[start:] where s[start:] starts with '\\sum_'.
-    Returns (hdr_start, hdr_end, var, lower_expr, upper_expr) or None.
-    """
-    if not s.startswith(r"\sum_", start):
-        return None
-    i = start
-    hdr_start = i
-    i += len(r"\sum_")
-
-    # Lower bound: braced or unbraced (e.g., {i=1} or i=1)
+    if not s.startswith(r"\sum_", start): return None
+    i = start; hdr_start = i; i += len(r"\sum_")
+    # Lower: {i=1} or i=1
     if i < len(s) and s[i] == "{":
-        lower, j = _find_braced(s, i)
-        i = j + 1
+        lower, j = _find_braced(s, i); i = j + 1
     else:
-        # read until '^'
         j = i
-        while j < len(s) and s[j] != "^":
-            j += 1
-        lower = s[i:j].strip()
-        i = j
-
-    if i >= len(s) or s[i] != "^":
-        raise ValueError("Missing '^' in sum header")
-    i += 1  # skip '^'
-
-    # Upper bound: braced or bare token
+        while j < len(s) and s[j] != "^": j += 1
+        lower = s[i:j].strip(); i = j
+    if i >= len(s) or s[i] != "^": raise ValueError("Missing '^' in sum header")
+    i += 1
+    # Upper: {N} or N
     if i < len(s) and s[i] == "{":
-        upper, j = _find_braced(s, i)
-        i = j + 1
+        upper, j = _find_braced(s, i); i = j + 1
     else:
         m = re.match(r"[A-Za-z0-9_]+", s[i:])
-        if not m:
-            raise ValueError("Missing/invalid upper bound in sum header")
-        upper = m.group(0)
-        i += len(upper)
-
-    # Parse lower into var=start
-    if "=" not in lower:
-        raise ValueError("Summation lower bound must be like i=1")
+        if not m: raise ValueError("Missing/invalid upper bound in sum header")
+        upper = m.group(0); i += len(upper)
+    if "=" not in lower: raise ValueError("Summation lower bound must be like i=1")
     var, lower_expr = lower.split("=", 1)
     var = var.strip(); lower_expr = lower_expr.strip()
-
     hdr_end = i
     return hdr_start, hdr_end, var, lower_expr, upper
 
 def _find_first_sum(s: str) -> Optional[Tuple[int, int, str, str, str, str, int]]:
-    """
-    Find first sum occurrence and capture body (braced or token).
-    Returns (hdr_start, hdr_end, var, lower_expr, upper_expr, body, end_after_body)
-    """
-    # Look for '\sum_' anywhere
     m = re.search(r"\\sum_", s)
     if not m: return None
     parsed = _parse_sum_header(s, m.start())
     if not parsed: return None
     hdr_start, hdr_end, var, lower_expr, upper_expr = parsed
-
-    # Body starts at hdr_end
-    if hdr_end >= len(s):
-        raise ValueError("Missing summation body after \\sum")
+    # Body
+    if hdr_end >= len(s): raise ValueError("Missing summation body after \\sum")
     if s[hdr_end] == "{":
-        body, body_end = _find_braced(s, hdr_end)
-        end_after_body = body_end + 1
+        body, body_end = _find_braced(s, hdr_end); end_after_body = body_end + 1
     else:
-        # capture token/expression until next top-level + or - (or end)
         j = hdr_end; depth = 0
         while j < len(s):
             ch = s[j]
@@ -360,32 +300,23 @@ def _find_first_sum(s: str) -> Optional[Tuple[int, int, str, str, str, str, int]
             elif ch in "+-" and depth == 0:
                 break
             j += 1
-        body = s[hdr_end:j].strip()
-        end_after_body = j
-
+        body = s[hdr_end:j].strip(); end_after_body = j
     return hdr_start, hdr_end, var, lower_expr, upper_expr, body, end_after_body
 
 def _eval_one_sum(s: str, variables: Dict[str, float]) -> str:
     occ = _find_first_sum(s)
-    if not occ:
-        return s
+    if not occ: return s
     hdr_start, hdr_end, var, lower_expr, upper_expr, body, end_after_body = occ
-
     env = _build_env(variables)
-
-    # Preprocess lower/upper/body, then convert ^ → ** locally for eval
     lower_py = _caret_to_pow(_preprocess_base(lower_expr))
     upper_py = _caret_to_pow(_preprocess_base(upper_expr))
     body_py  = _caret_to_pow(_preprocess_base(body))
-
     start_val = int(round(_safe_eval(lower_py, env)))
     end_val   = int(round(_safe_eval(upper_py, env)))
-
     total = 0.0
     for k in range(start_val, end_val + 1):
         env_iter = dict(env); env_iter[var] = k
         total += float(_safe_eval(body_py, env_iter))
-
     prefix = s[:hdr_start]; suffix = s[end_after_body:]
     return f"{prefix}({total}){suffix}"
 
@@ -394,45 +325,18 @@ def _expand_all_sums(s: str, variables: Dict[str, float]) -> str:
     while prev != cur:
         safety += 1
         if safety > SUM_NEST_LIMIT:
-            logger.warning("phase=sum_expand kind=LimitExceeded expr=%s", _short(cur))
-            break
+            raise ValueError("Too many nested summations")
         prev = cur
-        try:
-            cur = _eval_one_sum(cur, variables)
-        except Exception as e:
-            logger.debug("phase=sum_expand kind=%s msg=%s expr=%s",
-                         type(e).__name__, _short(str(e)), _short(cur))
-            break
+        cur = _eval_one_sum(cur, variables)
     return cur
 
 # ----------------------------------------------------------------------
 # LaTeX → Python expression
 # ----------------------------------------------------------------------
 def latex_to_python_expr(latex: str, variables: Dict[str, float]) -> str:
-    # Stage 1: base transforms (NO global '^'→'**' here)
-    try:
-        s = _preprocess_base(latex)
-        logger.debug("phase=preprocess ok expr=%s", _short(s))
-    except Exception as e:
-        logger.warning("phase=preprocess kind=%s msg=%s latex=%s",
-                       type(e).__name__, _short(str(e)), _short(latex))
-        raise
-
-    # Stage 2: expand sums first (so '^' in headers is intact)
-    try:
-        s_exp = _expand_all_sums(s, variables)
-        if s_exp != s:
-            logger.debug("phase=sum_expand changed=1 expr=%s", _short(s_exp))
-        s = s_exp
-    except Exception as e:
-        logger.warning("phase=sum_expand kind=%s msg=%s expr=%s",
-                       type(e).__name__, _short(str(e)), _short(s))
-        raise
-
-    # Stage 3: now convert remaining '^' to '**'
+    s = _preprocess_base(latex)          # may raise
+    s = _expand_all_sums(s, variables)   # may raise
     s = _caret_to_pow(s)
-
-    # Stage 4: whitespace cleanup
     s = re.sub(r"\s+", "", s)
     return s
 
@@ -446,7 +350,7 @@ def _build_env(variables: Dict[str, float]) -> Dict[str, Any]:
     return env
 
 # ----------------------------------------------------------------------
-# Core solver (soft-fail per test)
+# Core solver (soft-fail per test, only logs failed tests)
 # ----------------------------------------------------------------------
 class Sol:
     r"""Evaluate LaTeX formulas with variable maps (no third-party libs)."""
@@ -454,23 +358,21 @@ class Sol:
     def __init__(self, tests: List[Dict[str, Any]]):
         self.tests = tests
 
-    def _evaluate_one(self, name: str, formula: str, variables: Dict[str, float]) -> float:
+    def _evaluate_one(self, name: str, ttype: str, formula: str, variables: Dict[str, float]) -> float:
         try:
             expr = latex_to_python_expr(formula, variables)
         except Exception as e:
-            logger.warning("test=%s result=default phase=transform kind=%s ops_hint=%s latex=%s",
-                           name, type(e).__name__, _ops_present(formula), _short(formula))
+            _log_failed_test(name, formula, variables, ttype, phase="transform",
+                             kind=type(e).__name__, msg=str(e))
             return float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")
 
         env = _build_env(variables)
         try:
             val = _safe_eval(expr, env)
-            out = float(f"{float(val):.{ROUND_DP}f}")
-            logger.debug("test=%s result=ok value=%s expr=%s", name, out, _short(expr))
-            return out
+            return float(f"{float(val):.{ROUND_DP}f}")
         except Exception as e:
-            logger.warning("test=%s result=default phase=eval kind=%s msg=%s expr=%s ops=%s",
-                           name, type(e).__name__, _short(str(e)), _short(expr), _ops_present(expr))
+            _log_failed_test(name, formula, variables, ttype, phase="eval",
+                             kind=type(e).__name__, msg=str(e))
             return float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")
 
     def solve(self) -> List[Dict[str, float]]:
@@ -482,11 +384,32 @@ class Sol:
             variables = test.get("variables", {})
             if not isinstance(variables, dict): variables = {}
             if ttype != "compute":
-                logger.debug("Unsupported type '%s' in test '%s' — defaulting.", ttype, name)
+                _log_failed_test(name, formula, variables, ttype, phase="type",
+                                 kind="UnsupportedType", msg=f"type={ttype}")
                 out.append({"result": float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")})
                 continue
-            out.append({"result": self._evaluate_one(name, formula, variables)})
+            out.append({"result": self._evaluate_one(name, ttype, formula, variables)})
         return out
+
+# ----------------------------------------------------------------------
+# Flask route
+# ----------------------------------------------------------------------
+@app.route('/trading-formula', methods=['POST'])
+def trading_formula():
+    """
+    Accepts: JSON array of testcases.
+    Returns: 200 + JSON array of {"result": number} for each testcase (never aborts the batch).
+    Only failed testcases are logged, as a single JSON line each.
+    """
+    tests = request.get_json(silent=True)
+    if not isinstance(tests, list):
+        # soft return: empty set, no logs
+        return jsonify([]), 200
+
+    solver = Sol(tests)
+    results = solver.solve()
+    return jsonify(results), 200
+
 
 
 
