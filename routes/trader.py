@@ -647,6 +647,14 @@ def _resolve_free_i_with_N(s: str, variables: Dict[str, float]) -> str:
     N = int(round(float(variables["N"])))
     return re.sub(r"\b([A-Za-z][A-Za-z0-9_]*)_i\b", rf"\1_{N}", s)
 
+def _resolve_free_t_with_T(s: str, variables: Dict[str, float]) -> str:
+    """Replace any X_t with X_<T> if T is provided (e.g., Y_t -> Y_3 when T=3)."""
+    if "T" not in variables: 
+        return s
+    T = int(round(float(variables["T"])))
+    return re.sub(r"\b([A-Za-z][A-Za-z0-9_]*)_t\b", rf"\1_{T}", s)
+
+
 # ----------------------------------------------------------------------
 # LaTeX → Python expression
 # ----------------------------------------------------------------------
@@ -679,6 +687,7 @@ def latex_to_python_expr(latex: str, variables: Dict[str, float], aggressive: bo
     s = _preprocess_base(latex, aggressive=aggressive)
     s = _expand_all_sums(s, variables, aggressive=aggressive)
     s = _resolve_free_i_with_N(s, variables)   # handle trailing *_i terms
+    s = _resolve_free_t_with_T(s, variables)
     s = _caret_to_pow(s)                        # convert ^ and ^{...}
     s = s.replace("{", "(").replace("}", ")")   # neutralize residual braces
     s = re.sub(r"\s+", "", s)
