@@ -8,7 +8,7 @@ from routes import app
 
 # hz naschest 1,6,7,
 
-_RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,4,2,5,4")  # default placeholder
+_RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,4,3,5,4")  # default placeholder
 try:
     ANSWERS = [int(x.strip()) for x in _RAW.split(",") if x.strip()]
 except ValueError:
