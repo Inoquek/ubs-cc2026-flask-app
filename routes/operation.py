@@ -258,7 +258,7 @@ def challenge3_calc(data: str) -> str:
 
 def challenge4_calc(result1, result2, result3) :
 
-    return "a"
+    return ""
 
 @app.route('/operation-safeguard', methods=['POST'])
 def operation():
