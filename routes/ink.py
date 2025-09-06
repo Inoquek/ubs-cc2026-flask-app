@@ -5,6 +5,7 @@ from flask import request, jsonify
 from routes import app
 import json
 import numpy as np
+from decimal import Decimal
 logger = logging.getLogger(__name__)
 
 
@@ -269,7 +270,13 @@ def ink():
         {"path": [...], "gain": ...}
       ]
     """
-    data = request.get_json()
+    raw = request.get_data(as_text=True)
+    try:
+        data = json.loads(raw, parse_float=Decimal)
+    except Exception as e:
+        logger.exception("Failed to parse JSON as Decimal: %s", e)
+        return jsonify({"error": "invalid json"}), 400
+    
     logger.info("Received testcases: %s", json.dumps(data, indent=2))
     
     # logger.info("data sent for evaluation %s", data)
