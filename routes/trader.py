@@ -116,7 +116,6 @@ def _drop_trailing_constraints(s: str) -> str:
         elif ch == "," and depth == 0:
             return s[:idx].strip()
     return s
-
 def _rename_keywords_in_expr(expr: str, variables: Dict[str, Any]) -> tuple[str, Dict[str, str]]:
     """Rename Python keyword variable names in expr to safe aliases (name_)."""
     alias_map: Dict[str, str] = {}
@@ -480,9 +479,6 @@ def _eval_one_sum(s: str, variables: Dict[str, float]) -> str:
     for k in range(start_val, end_val + 1):
         env_iter = dict(env); env_iter[var] = k
         body_k = patt.sub(rf"\1_{k}", body_py)
-        
-        body_k, alias_map = _rename_keywords_in_expr(body_k, variables)
-        env_iter = _apply_alias_env(env_iter, alias_map)
         total += float(_safe_eval(body_k, env_iter))
 
     prefix = s[:hdr_start]; suffix = s[end_after_body:]
@@ -512,7 +508,6 @@ def latex_to_python_expr(latex: str, variables: Dict[str, float]) -> str:
     s = _expand_all_sums(s, variables)
     s = _resolve_free_i_with_N(s, variables)   # NEW
     s = _caret_to_pow(s)                        # now handle ^ and ^{...}
-    s = s.replace("{", "(").replace("}", ")")
     s = re.sub(r"\s+", "", s)
     return s
 
@@ -544,9 +539,6 @@ class Sol:
             return float(f"{DEFAULT_RESULT:.{ROUND_DP}f}")
 
         env = _build_env(variables)
-        expr, alias_map = _rename_keywords_in_expr(expr, variables)
-        env = _apply_alias_env(env, alias_map)
-        
         try:
             val = _safe_eval(expr, env)
             return float(f"{float(val):.{ROUND_DP}f}")
