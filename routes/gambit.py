@@ -55,8 +55,6 @@ def gambit():
     if not isinstance(payload, list):
         return jsonify({"error": "Expected a JSON array of cases"}), 400
     
-    for case in payload:
-        logger.info(case)
     try:
         result = [solve_case(case) for case in payload]
     except (KeyError, TypeError, ValueError) as e:
