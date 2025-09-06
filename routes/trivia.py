@@ -9,9 +9,9 @@ from routes import app
 # hz naschest 6,7,
 # definitely correct 3,1,2,2,3, ... , 4 , 5, 4,3,3, , ,  
 _RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,4,4,5,4,3,-1, -1, -1, -1, 2, 1, 1,2, -1, 1, -1,-1,-1,-1,-1")
-# _RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,3,4,5,4,  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1")  # default placeholder
-#  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
-#  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2
+# -1 if dk the answer yet
+# everything else is correct so far
+
 try:
     ANSWERS = [int(x.strip()) for x in _RAW.split(",") if x.strip()]
 except ValueError:
