@@ -7,7 +7,7 @@ ATTACK_MINUTES = 10
 COOLDOWN_MINUTES = 10
 
 logging.basicConfig(level=logging.INFO)
-FAIL_LOGGER = logging.getLogger("mages.fail")
+FAIL_LOGGER = logging.getLogger(__name__)
 FAIL_LOGGER.setLevel(logging.INFO)   # <= now logs at INFO 
 
 def _log_failed_test(case, got, expected):
