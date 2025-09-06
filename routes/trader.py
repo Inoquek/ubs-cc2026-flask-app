@@ -231,6 +231,7 @@ def _preprocess_base(latex: str) -> str:
     s = _transform_frac(s)
     s = _transform_power_e(s)
     s = _normalize_funcs_to_python(s)
+    s = _insert_implicit_mult(s)
     s = _strip_redundant_braces(s)
     return s.strip()
 
@@ -330,6 +331,43 @@ def _expand_all_sums(s: str, variables: Dict[str, float]) -> str:
         prev = cur
         cur = _eval_one_sum(cur, variables)
     return cur
+
+def _insert_implicit_mult(s: str) -> str:
+    """
+    Insert missing '*' for implicit multiplication:
+      - A( ... ) -> A*( ... )
+      - )( or )x -> )*x
+      - 2x -> 2*x
+      - x y -> x*y
+    Protect known calls first so we don't insert '*' before their '('.
+    """
+    # Protect known call patterns
+    protos = {
+        "math.log(": "MATHLOG(",
+        "math.exp(": "MATHEXP(",
+        "max(": "MAXF(",
+        "min(": "MINF(",
+    }
+    for k, v in protos.items():
+        s = s.replace(k, v)
+
+    # 1) var/number/')' followed by '('  -> insert '*'
+    s = re.sub(r'([0-9A-Za-z_)\]])\s*\(', r'\1*(', s)
+
+    # 2) ')' followed by var/number  -> insert '*'
+    s = re.sub(r'\)\s*([0-9A-Za-z_])', r')*\1', s)
+
+    # 3) number followed by variable  -> insert '*'
+    s = re.sub(r'(\d)\s*([A-Za-z_])', r'\1*\2', s)
+
+    # 4) variable followed by variable  -> insert '*'
+    s = re.sub(r'([A-Za-z_][A-Za-z_0-9]*)\s+([A-Za-z_])', r'\1*\2', s)
+
+    # Unprotect
+    for k, v in protos.items():
+        s = s.replace(v, k)
+
+    return s
 
 
 # ------------------------- Main latex → python expression -------------------------
