@@ -147,60 +147,48 @@ logger = logging.getLogger(__name__)
 
 #     logger.info("Ready to Return")
 #     return {"path": rev_path, "gain": float((mx - 1.0) * 100.0)}
-                
+
 def calc1(data):
     """
-    For the first challenge: return ANY surplus cycle.
-    To match the expected sample exactly, we pick the maximum-gain simple cycle
-    (which is also a surplus cycle) using a DFS enumerator.
+    Part I ("The Whispering Loop"): return the best profitable triangle
+    (i -> j -> k -> i). If none exists, return empty/0 gain.
     """
     ratios = data.get("ratios") or []
     goods = data.get("goods") or []
     n = len(goods)
 
-    # Build adjacency list: u -> list[(v, rate)]
-    adj = [[] for _ in range(n)]
+    # Dense rate lookup (0.0 means no edge)
+    rate = [[0.0] * n for _ in range(n)]
     for u, v, r in ratios:
-        ui = int(u); vi = int(v); rate = float(r)
-        if 0 <= ui < n and 0 <= vi < n and rate > 0.0:
-            adj[ui].append((vi, rate))
+        ui = int(u); vi = int(v)
+        if 0 <= ui < n and 0 <= vi < n:
+            rate[ui][vi] = float(r)
 
     best_prod = 1.0
-    best_cycle = None  # list of node indices including start again at the end
+    best_triangle = None  # (i, j, k) means i->j->k->i
 
-    # Enumerate simple cycles with canonical first step (to >= start) to avoid dupes
-    def dfs(start, node, product, path, visited, first_step):
-        nonlocal best_prod, best_cycle
-        for to, rate in adj[node]:
-            if to == start and len(path) >= 2:
-                total = product * rate
-                if total > best_prod:
-                    best_prod = total
-                    best_cycle = path + [start]
-            elif to not in visited and len(path) < n:
-                if first_step and to < start:
-                    continue
-                visited.add(to)
-                dfs(start, to, product * rate, path + [to], visited, False)
-                visited.remove(to)
-
-    for start in range(n):
-        if not adj[start]:
-            continue
-        visited = {start}
-        for to, rate in adj[start]:
-            if to < start:
+    # Enumerate all distinct triples i, j, k
+    for i in range(n):
+        for j in range(n):
+            if j == i or rate[i][j] <= 0.0:
                 continue
-            visited.add(to)
-            dfs(start, to, rate, [start, to], visited, False)
-            visited.remove(to)
+            for k in range(n):
+                if k == i or k == j:
+                    continue
+                if rate[j][k] <= 0.0 or rate[k][i] <= 0.0:
+                    continue
+                prod = rate[i][j] * rate[j][k] * rate[k][i]
+                if prod > best_prod:
+                    best_prod = prod
+                    best_triangle = (i, j, k)
 
-    if not best_cycle or best_prod <= 1.0:
+    if not best_triangle or best_prod <= 1.0:
         return {"path": [], "gain": 0.0}
 
-    path_names = [goods[i] for i in best_cycle]
+    i, j, k = best_triangle
+    path = [goods[i], goods[j], goods[k], goods[i]]
     gain = (best_prod - 1.0) * 100.0
-    return {"path": path_names, "gain": float(gain)}
+    return {"path": path, "gain": float(gain)}
 
 def calc2(data):
     """
