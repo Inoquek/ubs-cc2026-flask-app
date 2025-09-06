@@ -6,9 +6,9 @@ from routes import app
 # Optional: set TRIVIA_ANSWERS in Railway (comma-separated ints)
 # e.g. "1,3,2,2,4,4,3,1,2"
 
-# hz naschest 1,6,7,
+# hz naschest 6,7,
 
-_RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,4,3,5,4")  # default placeholder
+_RAW = os.getenv("TRIVIA_ANSWERS", "3,1,2,2,3,4,4,5,4")  # default placeholder
 try:
     ANSWERS = [int(x.strip()) for x in _RAW.split(",") if x.strip()]
 except ValueError:
